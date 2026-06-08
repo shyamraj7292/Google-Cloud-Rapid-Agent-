@@ -1,0 +1,79 @@
+stages:
+  - install
+  - lint
+  - test
+  - build
+  - deploy
+
+variables:
+  NODE_VERSION: "20"
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - node_modules/
+
+install:
+  stage: install
+  image: node:${NODE_VERSION}-slim
+  script:
+    - npm ci
+  artifacts:
+    paths:
+      - node_modules/
+    expire_in: 1 hour
+
+lint:
+  stage: lint
+  image: node:${NODE_VERSION}-slim
+  script:
+    - npm run lint
+  allow_failure: true
+
+test:
+  stage: test
+  image: node:${NODE_VERSION}-slim
+  script:
+    - npm run test -- --coverage --watchAll=false
+  coverage: '/All files.*?\|.*?\|.*?\|.*?\|\s+([\d.]+)/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura-coverage.xml
+
+build:
+  stage: build
+  image: node:${NODE_VERSION}-slim
+  script:
+    - npm run build
+  artifacts:
+    paths:
+      - build/
+    expire_in: 1 day
+
+deploy_staging:
+  stage: deploy
+  image: google/cloud-sdk:slim
+  script:
+    - echo "Deploying fan-app to staging..."
+    - gcloud run deploy worldcup-fan-app-staging --source ./build --region us-central1 --allow-unauthenticated
+  environment:
+    name: staging
+    url: https://staging-fan.copa2026.dev
+  only:
+    - develop
+  when: manual
+
+deploy_production:
+  stage: deploy
+  image: google/cloud-sdk:slim
+  script:
+    - echo "Deploying fan-app to production..."
+    - gcloud run deploy worldcup-fan-app --source ./build --region us-central1 --allow-unauthenticated --min-instances 5 --max-instances 100
+  environment:
+    name: production
+    url: https://fan.copa2026.com
+  only:
+    - main
+  when: manual

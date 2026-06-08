@@ -1,0 +1,128 @@
+{
+  "name": "gitlab-mcp",
+  "displayName": "GitLab MCP Server",
+  "description": "Provides full GitLab API access via Model Context Protocol — repos, pipelines, merge requests, issues, and more.",
+  "type": "mcp_server",
+  "config": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-gitlab"],
+    "env": {
+      "GITLAB_PERSONAL_ACCESS_TOKEN": "${GITLAB_PERSONAL_ACCESS_TOKEN}",
+      "GITLAB_API_URL": "https://gitlab.com/api/v4"
+    }
+  },
+  "tools": [
+    {
+      "name": "list_projects",
+      "description": "List GitLab projects accessible to the authenticated user"
+    },
+    {
+      "name": "get_project",
+      "description": "Get details of a specific GitLab project by ID or path"
+    },
+    {
+      "name": "search_projects",
+      "description": "Search for GitLab projects by name or keyword"
+    },
+    {
+      "name": "get_file_contents",
+      "description": "Get the contents of a file from a GitLab repository"
+    },
+    {
+      "name": "create_or_update_file",
+      "description": "Create a new file or update an existing file in a GitLab repository"
+    },
+    {
+      "name": "list_branches",
+      "description": "List branches in a GitLab project"
+    },
+    {
+      "name": "create_branch",
+      "description": "Create a new branch in a GitLab project"
+    },
+    {
+      "name": "list_merge_requests",
+      "description": "List merge requests in a GitLab project"
+    },
+    {
+      "name": "get_merge_request",
+      "description": "Get details of a specific merge request"
+    },
+    {
+      "name": "create_merge_request",
+      "description": "Create a new merge request in a GitLab project"
+    },
+    {
+      "name": "merge_merge_request",
+      "description": "Merge an existing merge request"
+    },
+    {
+      "name": "update_merge_request",
+      "description": "Update an existing merge request"
+    },
+    {
+      "name": "list_pipelines",
+      "description": "List CI/CD pipelines in a GitLab project"
+    },
+    {
+      "name": "get_pipeline",
+      "description": "Get details of a specific pipeline"
+    },
+    {
+      "name": "list_pipeline_jobs",
+      "description": "List jobs in a specific pipeline"
+    },
+    {
+      "name": "get_pipeline_job_log",
+      "description": "Get the log output of a specific pipeline job"
+    },
+    {
+      "name": "retry_pipeline",
+      "description": "Retry a failed pipeline"
+    },
+    {
+      "name": "cancel_pipeline",
+      "description": "Cancel a running pipeline"
+    },
+    {
+      "name": "trigger_pipeline",
+      "description": "Trigger a new pipeline run"
+    },
+    {
+      "name": "list_issues",
+      "description": "List issues in a GitLab project"
+    },
+    {
+      "name": "get_issue",
+      "description": "Get details of a specific issue"
+    },
+    {
+      "name": "create_issue",
+      "description": "Create a new issue in a GitLab project"
+    },
+    {
+      "name": "update_issue",
+      "description": "Update an existing issue"
+    },
+    {
+      "name": "list_issue_notes",
+      "description": "List notes/comments on an issue"
+    },
+    {
+      "name": "create_issue_note",
+      "description": "Add a note/comment to an issue"
+    },
+    {
+      "name": "list_labels",
+      "description": "List labels in a GitLab project"
+    },
+    {
+      "name": "create_label",
+      "description": "Create a new label in a GitLab project"
+    },
+    {
+      "name": "list_milestones",
+      "description": "List milestones in a GitLab project"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "name": "worldcup-fan-app",
+  "version": "1.0.0",
+  "description": "FIFA World Cup 2026 Fan App — Schedules, Scores, Venue Maps",
+  "scripts": {
+    "start": "node server.js",
+    "build": "echo 'Build complete'",
+    "test": "node tests/test_app.js",
+    "lint": "echo 'Lint passed'"
+  }
+}

@@ -1,0 +1,62 @@
+stages:
+  - install
+  - test
+  - build
+  - deploy
+
+variables:
+  NODE_VERSION: "20"
+
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - node_modules/
+
+install:
+  stage: install
+  image: node:${NODE_VERSION}-slim
+  script:
+    - npm ci
+
+test:
+  stage: test
+  image: node:${NODE_VERSION}-slim
+  script:
+    - npm run test
+  allow_failure: false
+
+build:
+  stage: build
+  image: node:${NODE_VERSION}-slim
+  script:
+    - npm run build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 day
+
+deploy_staging:
+  stage: deploy
+  image: google/cloud-sdk:slim
+  script:
+    - echo "Deploying stadium-dashboard to staging..."
+    - gcloud run deploy worldcup-stadium-dashboard-staging --source ./dist --region us-central1 --no-allow-unauthenticated
+  environment:
+    name: staging
+    url: https://staging-stadium.copa2026.dev
+  only:
+    - develop
+  when: manual
+
+deploy_production:
+  stage: deploy
+  image: google/cloud-sdk:slim
+  script:
+    - echo "Deploying stadium-dashboard to production..."
+    - gcloud run deploy worldcup-stadium-dashboard --source ./dist --region us-central1 --no-allow-unauthenticated --min-instances 2 --max-instances 20
+  environment:
+    name: production
+    url: https://stadium.copa2026.com
+  only:
+    - main
+  when: manual
