@@ -106,6 +106,7 @@ document.addEventListener('DOMContentLoaded', () => {
   renderPipelines();
   renderVenues();
   bindEvents();
+  loadEngineMode();
 
   // Initialize Lucide icons
   if (window.lucide) {
@@ -153,6 +154,26 @@ function bindEvents() {
 }
 
 // ============================================================
+//  ENGINE MODE BADGE
+// ============================================================
+async function loadEngineMode() {
+  const badge = document.getElementById('engine-badge');
+  if (!badge) return;
+  try {
+    const res = await fetch(`${CONFIG.API_BASE}/agent/mode`);
+    if (!res.ok) throw new Error();
+    const m = await res.json();
+    const live = m.gitlab_mode === 'live';
+    const backend = { vertex: 'Vertex AI', gemini: 'Gemini', scripted: 'Demo Engine' }[m.agent_backend] || m.agent_backend;
+    badge.textContent = `● ${backend} · GitLab ${live ? 'LIVE' : 'sim'}`;
+    badge.classList.toggle('engine-badge--live', live);
+    badge.title = `Agent: ${m.agent_backend} (${m.model}) · GitLab: ${m.gitlab_mode}`;
+  } catch {
+    badge.textContent = '● Demo Engine';
+  }
+}
+
+// ============================================================
 //  CHAT LOGIC
 // ============================================================
 async function handleSend() {
@@ -172,27 +193,11 @@ async function handleSend() {
   const typingEl = showTypingIndicator();
 
   try {
-    const response = await sendToAgent(message);
-    removeElement(typingEl);
-
-    // Show actions sequentially
-    if (response.actions && response.actions.length > 0) {
-      showActionFeed(true);
-      for (const action of response.actions) {
-        addActionFeedItem(action);
-        addTimelineItem(action);
-        await sleep(CONFIG.ACTION_STAGGER);
-      }
-    }
-
-    // Show agent reply
-    addChatMessage('agent', response.reply);
-    state.sessionId = response.session_id;
-
+    await streamFromAgent(message, typingEl);
   } catch (err) {
     removeElement(typingEl);
-    addChatMessage('agent', `⚠️ Error communicating with Copa Agent: ${err.message}. Running in demo mode.`);
-    // Fall back to demo response
+    addChatMessage('agent', `⚠️ Live agent unreachable (${err.message}). Showing demo flow.`);
+    // Client-side fallback so the UI is never dead.
     const demoResponse = generateDemoResponse(message);
     showActionFeed(true);
     for (const action of demoResponse.actions) {
@@ -200,7 +205,7 @@ async function handleSend() {
       addTimelineItem(action);
       await sleep(CONFIG.ACTION_STAGGER);
     }
-    addChatMessage('agent', demoResponse.reply);
+    addChatMessage('agent', demoResponse.reply); // already HTML
   }
 
   state.isWaiting = false;
@@ -208,17 +213,90 @@ async function handleSend() {
   DOM.chatInput.focus();
 }
 
-async function sendToAgent(message) {
-  const body = { message, session_id: state.sessionId };
-
-  const res = await fetch(`${CONFIG.API_BASE}/agent/chat`, {
+/**
+ * Stream the agent's reason→act→observe loop via Server-Sent Events.
+ * Renders each status line and tool action live as the agent works.
+ */
+async function streamFromAgent(message, typingEl) {
+  const res = await fetch(`${CONFIG.API_BASE}/agent/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ message, session_id: state.sessionId }),
   });
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let gotReply = false;
+  let actionShown = false;
+
+  const setThinking = (text) => {
+    const t = typingEl.querySelector('.typing-thought');
+    if (t) { t.textContent = text; }
+    else {
+      const tt = document.createElement('div');
+      tt.className = 'typing-thought';
+      tt.textContent = text;
+      typingEl.querySelector('.message-content')?.appendChild(tt);
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let idx;
+    while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      const raw = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 2);
+      if (!raw.startsWith('data:')) continue;
+      let ev;
+      try { ev = JSON.parse(raw.slice(5).trim()); } catch { continue; }
+
+      if (ev.type === 'session') {
+        state.sessionId = ev.session_id;
+      } else if (ev.type === 'status') {
+        setThinking(ev.text);
+      } else if (ev.type === 'action') {
+        if (!actionShown) { showActionFeed(true); actionShown = true; }
+        const a = { tool_name: ev.tool, description: ev.description, timestamp: ev.timestamp, status: ev.status };
+        addActionFeedItem(a);
+        addTimelineItem(a);
+      } else if (ev.type === 'reply') {
+        removeElement(typingEl);
+        addChatMessage('agent', renderMarkdown(ev.reply));
+        gotReply = true;
+      }
+    }
+  }
+  if (!gotReply) { removeElement(typingEl); }
+}
+
+/** Minimal, safe Markdown → HTML for agent replies (bold, code, links, tables, lists). */
+function renderMarkdown(md) {
+  if (!md) return '';
+  // Escape first, then re-introduce a controlled set of tags.
+  let h = escapeHtml(md);
+  // Tables (| a | b | rows)
+  h = h.replace(/(^\|.*\|$\n?)+/gm, (block) => {
+    const rows = block.trim().split('\n').filter((r) => !/^\|[\s|:-]+\|$/.test(r));
+    const cells = rows.map((r) => r.split('|').slice(1, -1).map((c) => c.trim()));
+    if (!cells.length) return block;
+    const head = `<tr>${cells[0].map((c) => `<th>${c}</th>`).join('')}</tr>`;
+    const body = cells.slice(1).map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`).join('');
+    return `<table>${head}${body}</table>`;
+  });
+  h = h
+    .replace(/\[([^\]]+)\]\((https?:[^)]+|#)\)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/^### (.*)$/gm, '<h4>$1</h4>')
+    .replace(/^\d+\.\s+(.*)$/gm, '<div class="md-li">• $1</div>')
+    .replace(/^[-*]\s+(.*)$/gm, '<div class="md-li">• $1</div>')
+    .replace(/\n/g, '<br>');
+  return h;
 }
 
 // ============================================================
@@ -365,12 +443,12 @@ function clearChat() {
   showActionFeed(false);
   if (DOM.actionFeedItems) DOM.actionFeedItems.innerHTML = '';
   // Reset timeline
-  DOM.actionsTimeline.innerHTML = \`
+  DOM.actionsTimeline.innerHTML = `
     <div class="timeline-empty">
       <i data-lucide="bot" class="icon-lg"></i>
       <p>No actions yet. Ask Copa Agent to do something!</p>
     </div>
-  \`;
+  `;
   if (window.lucide) lucide.createIcons();
 }
 
@@ -387,11 +465,11 @@ function addActionFeedItem(action) {
   if (!DOM.actionFeedItems) return;
   const el = document.createElement('div');
   el.className = 'action-feed-item';
-  el.innerHTML = \`
+  el.innerHTML = `
     <span>⚡</span>
-    <span class="action-tool">\${action.tool_name}</span>
-    <span>— \${action.description}</span>
-  \`;
+    <span class="action-tool">${action.tool_name}</span>
+    <span>— ${action.description}</span>
+  `;
   DOM.actionFeedItems.appendChild(el);
   DOM.actionFeedItems.scrollTop = DOM.actionFeedItems.scrollHeight;
 }
@@ -407,13 +485,13 @@ function addTimelineItem(action) {
   const time = new Date(action.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const el = document.createElement('div');
   el.className = 'timeline-item';
-  el.innerHTML = \`
-    <span class="timeline-time">\${time}</span>
+  el.innerHTML = `
+    <span class="timeline-time">${time}</span>
     <div class="timeline-icon">⚡</div>
     <div class="timeline-text">
-      <strong>\${action.tool_name}</strong> — \${action.description}
+      <strong>${action.tool_name}</strong> — ${action.description}
     </div>
-  \`;
+  `;
   // Prepend so newest appears at top
   DOM.actionsTimeline.prepend(el);
   state.actions.push(action);
@@ -427,25 +505,25 @@ function renderPipelines() {
   DOM.pipelineGrid.innerHTML = PROJECTS.map((p) => {
     const statusIcon = p.status === 'success' ? '✅' : p.status === 'failed' ? '❌' : '🔄';
     const statusLabel = p.status === 'success' ? 'Passed' : p.status === 'failed' ? 'Failed' : 'Running';
-    return \`
-      <div class="pipeline-card pipeline-card--\${p.status}" title="\${p.name}">
+    return `
+      <div class="pipeline-card pipeline-card--${p.status}" title="${p.name}">
         <div class="pipeline-card-header">
-          <span class="pipeline-card-name">\${p.name}</span>
+          <span class="pipeline-card-name">${p.name}</span>
           <span class="pipeline-card-status-dot"></span>
         </div>
-        <div class="pipeline-card-desc">\${p.desc}</div>
+        <div class="pipeline-card-desc">${p.desc}</div>
         <div class="pipeline-card-footer">
-          <span class="pipeline-card-id">\${p.pipelineId} · \${p.branch}</span>
-          <span class="pipeline-card-status-label">\${statusIcon} \${statusLabel}</span>
+          <span class="pipeline-card-id">${p.pipelineId} · ${p.branch}</span>
+          <span class="pipeline-card-status-label">${statusIcon} ${statusLabel}</span>
         </div>
       </div>
-    \`;
+    `;
   }).join('');
 
   // Update platform health
   const passed = PROJECTS.filter((p) => p.status === 'success').length;
   const pct = Math.round((passed / PROJECTS.length) * 100);
-  if (DOM.healthPct) DOM.healthPct.textContent = \`\${pct}%\`;
+  if (DOM.healthPct) DOM.healthPct.textContent = `${pct}%`;
 
   // Update status dot color
   if (DOM.platformStatus) {
@@ -464,16 +542,16 @@ function renderPipelines() {
 // ============================================================
 function renderVenues() {
   if (!DOM.venueGrid) return;
-  DOM.venueGrid.innerHTML = VENUES.map((v) => \`
-    <div class="venue-card" title="\${v.name}, \${v.city}">
-      <span class="venue-status-dot venue-status-dot--\${v.status}"></span>
+  DOM.venueGrid.innerHTML = VENUES.map((v) => `
+    <div class="venue-card" title="${v.name}, ${v.city}">
+      <span class="venue-status-dot venue-status-dot--${v.status}"></span>
       <div class="venue-info">
-        <div class="venue-name">\${v.name}</div>
-        <div class="venue-city">\${v.city}</div>
+        <div class="venue-name">${v.name}</div>
+        <div class="venue-city">${v.city}</div>
       </div>
-      <span class="venue-flag">\${v.flag}</span>
+      <span class="venue-flag">${v.flag}</span>
     </div>
-  \`).join('');
+  `).join('');
 }
 
 // ============================================================

@@ -1,107 +1,62 @@
-# 🎥 Copa Agent Demo Script (3 Minutes)
+# 🎥 Copa Agent — Demo Script (90 seconds)
 
-## Setup (Before Recording)
-1. Open the Copa Agent dashboard at `http://localhost:8080`
-2. Ensure the backend is running
-3. Clear any previous chat history
-4. Have the GitLab repos visible in another tab (optional)
+A tight, judge-ready walkthrough. Everything below works in **simulation mode**
+with no credentials — and identically when live creds are present.
 
----
-
-## Intro (0:00 – 0:30)
-
-**Show**: Dashboard overview
-
-**Script**: 
-> "This is Copa Agent — an AI DevOps command center for the 2026 FIFA World Cup. 
-> Unlike a typical chatbot, Copa Agent doesn't just answer questions — it takes real action
-> in your GitLab repositories using the GitLab MCP server.
-> 
-> You can see we have three World Cup microservices here — a fan app, a ticketing API, 
-> and a stadium dashboard. Notice the ticketing API pipeline is failing. Let's fix that."
+## Setup (before recording)
+1. `cd backend && python -m uvicorn main:app --port 8137`
+2. Open **http://localhost:8137**, clear chat.
+3. Note the **engine badge** in the top-right nav (e.g. *"● Demo Engine · GitLab sim"* →
+   *"● Vertex AI · GitLab LIVE"* when credentials are set). Point this out — it shows
+   the same code runs locally and in production.
 
 ---
 
-## Scenario 1: Pipeline Triage & Auto-Fix (0:30 – 1:30)
+### 0:00 – 0:15 — The problem
+**Show:** the dashboard. Pipeline health is low; `worldcup-ticketing-api` is red.
 
-**Action**: Click on the red pipeline card OR type the message
+> "This is Copa Agent — an *autonomous* DevOps commander for the 2026 World Cup
+> platform. Three microservices, and the ticketing API's pipeline is failing. Most
+> AI tools would explain the bug. Copa Agent fixes it."
 
-**Type**: "The ticketing API pipeline is failing. Can you investigate?"
+### 0:15 – 1:00 — Triage → fix → MR (the money shot)
+**Type** (or click *Triage Failures*):
+> "The ticketing API pipeline is failing — investigate and fix it."
 
-**Show**: 
-- Action feed lighting up with tool calls in real-time
-- Agent reading pipeline logs, finding the failing test
-- Root cause diagnosis: TOKEN_EXPIRY_SECONDS typo (360 vs 3600)
+**Show:** the action feed streaming live, one tool at a time:
+`list_pipelines → list_pipeline_jobs → get_pipeline_job_log → search_runbooks →
+get_file_contents → create_branch → create_or_update_file → create_merge_request →
+run_pipeline`.
 
-**Script**:
-> "Watch the action feed — Copa Agent is calling GitLab MCP tools in sequence.
-> It listed the pipelines, found the failing job, read the job log, and diagnosed 
-> the root cause: a typo in the auth token expiry constant.
-> 
-> Now let's have it fix the issue automatically."
+> "Watch it work, live. It found pipeline #42, read the failing job log, and
+> diagnosed the root cause — `TOKEN_EXPIRY_SECONDS` was 360 instead of 3600, a
+> missing-zero typo that locks fans out at the gates. It **grounded the fix in our
+> own runbook**, then committed the corrected file to a `fix/` branch, opened
+> **MR !18**, and re-ran the pipeline — now **green**. Zero manual work."
 
-**Type**: "Yes, fix it"
+**Highlight:** the *"📖 Playbook followed"* citation in the reply, and the MR link.
 
-**Show**:
-- Agent creating branch, pushing fix, opening merge request
-- Actions appearing in the timeline
+### 1:00 – 1:20 — Match Day deploy guardrails
+**Type:**
+> "Deploy all services for MetLife Stadium — there's a match tonight."
 
-**Script**:
-> "Copa Agent just created a fix branch, corrected the code, and opened a merge request —
-> all through GitLab's MCP server. No manual work needed."
+**Show:** the agent checks every repo and **holds** the deploy with named blockers.
 
----
+> "Per the Match Day Protocol, it verifies *every* service is green before
+> deploying — and refuses to deploy half-green on match day. Safety, not just speed."
 
-## Scenario 2: Smart Deployment (1:30 – 2:15)
-
-**Type**: "Deploy all services for MetLife Stadium — there's a match tonight"
-
-**Show**:
-- Agent checking all pipelines
-- Following Match Day Protocol
-- Deployment readiness table
-
-**Script**:
-> "For deployments, Copa Agent follows the Match Day Protocol from our grounded runbooks.
-> It checks all pipelines, waits for green across all services, then tags releases and 
-> triggers deploy pipelines in dependency order.
-> 
-> The stadium dashboard is still running, so it waits rather than deploying blind."
+### 1:20 – 1:30 — The autonomous angle + close
+> "And it's not just chat — a GitLab webhook on a failed pipeline triggers this exact
+> fix automatically, with no human in the loop. Built on Google Cloud Vertex AI and
+> the GitLab MCP server. World Cup 2026 is ready for kickoff. ⚽"
 
 ---
 
-## Scenario 3: Issue to MR (2:15 – 2:45)
-
-**Type**: "Create an issue for adding Spanish language support to the fan app, then start working on it"
-
-**Show**:
-- Agent creating issue, branch, files, and MR in rapid succession
-- 5 tool calls in the action feed
-
-**Script**:
-> "Copa Agent converts requirements into working code. It created an issue, a feature branch,
-> the translation files, and a merge request — all linked together. 
-> Five GitLab MCP tool calls, zero manual work."
-
----
-
-## Closing (2:45 – 3:00)
-
-**Show**: Full dashboard with all actions in the timeline
-
-**Script**:
-> "Copa Agent is built with Gemini on Google Cloud Agent Builder, integrated with 
-> GitLab's MCP server for real DevOps actions. It reasons, plans, and executes — 
-> keeping you in control while getting the job done.
-> 
-> World Cup 2026 is ready for kickoff. ⚽"
-
----
-
-## Key Points to Hit
-- [x] Agent takes ACTION, not just answers
-- [x] Multi-step workflow (diagnose → fix → MR)
-- [x] GitLab MCP integration is MEANINGFUL (5+ tool calls per scenario)
-- [x] Google Cloud Agent Builder + Gemini powers the reasoning
-- [x] Real-world problem: DevOps for World Cup infrastructure
-- [x] User stays in control (confirms before destructive actions)
+## Key points to land
+- [x] Agent **takes real action** (9 tool calls), not just answers
+- [x] Multi-step loop: diagnose → **ground & cite** → fix → MR → **verify green**
+- [x] Meaningful GitLab MCP integration (branches, commits, MRs, pipeline runs)
+- [x] Google Cloud Vertex AI / Gemini powers the reasoning
+- [x] Real-world stakes: fans locked out at venue gates
+- [x] Autonomous webhook triage + Match Day safety guardrails
+- [x] Bulletproof: dual-mode design, 12 passing tests, live engine badge

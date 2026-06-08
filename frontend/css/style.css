@@ -995,3 +995,51 @@ code, pre { font-family: var(--font-mono); }
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* ============================================================
+   ENGINE BADGE / LIVE THINKING / MARKDOWN  (Phase 1 additions)
+   ============================================================ */
+.engine-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-secondary, #9aa);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.08));
+  border-radius: var(--radius-full, 999px);
+  padding: 5px 12px;
+  white-space: nowrap;
+}
+.engine-badge--live {
+  color: #1aff8c;
+  border-color: rgba(26, 255, 140, 0.4);
+  background: rgba(26, 255, 140, 0.08);
+  box-shadow: 0 0 12px rgba(26, 255, 140, 0.15);
+}
+
+.typing-thought {
+  margin-top: 6px;
+  font-size: 12.5px;
+  font-style: italic;
+  color: var(--text-secondary, #9aa);
+  opacity: 0.9;
+  animation: thoughtPulse 1.4s ease-in-out infinite;
+}
+@keyframes thoughtPulse { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+
+.message-text .md-li { margin: 3px 0 3px 4px; }
+.message-text h4 { margin: 10px 0 4px; font-size: 14px; font-weight: 700; }
+.message-text table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  width: 100%;
+  font-size: 13px;
+}
+.message-text th, .message-text td {
+  border: 1px solid var(--border-subtle, rgba(255,255,255,0.1));
+  padding: 5px 9px;
+  text-align: left;
+}
+.message-text th { background: rgba(255,255,255,0.05); font-weight: 600; }
+.message-text a { color: var(--accent-green, #1aff8c); text-decoration: underline; }

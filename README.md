@@ -1,66 +1,112 @@
-# ⚽ Copa Agent: AI DevOps Commander for World Cup 2026
+# ⚽ Copa Agent — Autonomous DevOps Commander for World Cup 2026
 
 **Built for the "Building Agents for Real-World Challenges" Hackathon (GitLab Track)**
 
-Copa Agent is a multi-step, action-oriented AI agent that serves as an intelligent DevOps co-pilot for teams building the massive infrastructure required for the 2026 FIFA World Cup.
+Copa Agent is a true **action-taking AI agent** — not a chatbot — that acts as an
+autonomous DevOps co-pilot for the teams building the infrastructure behind the
+2026 FIFA World Cup (48 teams, 104 matches, 16 venues across 3 countries).
 
-Powered by **Google Cloud Agent Builder** and connected to the **GitLab Model Context Protocol (MCP)** server, Copa Agent doesn't just chat—it takes autonomous action to triage failing pipelines, fix code, and orchestrate complex deployments across multiple microservices.
+It runs a real **reason → act → observe loop**: when a pipeline breaks, Copa Agent
+reads the CI logs, grounds itself in your team's runbooks, **writes the actual
+code fix**, opens a Merge Request, and re-runs the pipeline to prove it's green —
+all streamed to a live command-center dashboard, step by step.
 
-## 🌟 Key Features
+> Powered by **Google Cloud (Gemini 2.5 / Vertex AI)** and the **GitLab MCP server**.
 
-- **Pipeline Triage & Auto-Fix**: The agent reads GitLab CI logs, diagnoses failures, creates fix branches, and opens Merge Requests natively.
-- **Smart Deployment Orchestrator**: Understands "Match Day Protocols", verifies all dependent pipelines are green, creates tags, and triggers multi-repo deployments.
-- **Issue-to-MR Automation**: Converts issue requests directly into code and draft Merge Requests.
-- **Premium Command Center**: A sleek, dark-mode dashboard showing cross-repo pipeline health, an agent activity timeline, and venue deployment status.
+---
+
+## 🌟 What makes it different
+
+Most "agents" describe what they *would* do. Copa Agent **does it**:
+
+| Capability | What actually happens |
+|---|---|
+| 🔍 **Pipeline triage & auto-fix** | Lists pipelines → finds the failed job → reads the log → **commits the corrected file to a `fix/` branch → opens an MR → re-runs the pipeline** and reports green. |
+| 📖 **Grounded, cited decisions** | Before acting, it searches your runbooks/playbooks (Vertex AI Search) and **cites the exact section it followed** — auditable, not guesswork. |
+| 🚀 **Match Day deploy orchestration** | A multi-repo workflow that verifies **every** service is green before deploying — and *holds the deploy* with named blockers when one isn't. |
+| 📝 **Issue → MR automation** | Turns a feature request into a real issue + branch + files + linked MR. |
+| 📡 **Autonomous webhook triage** | A GitLab `pipeline failed` webhook makes the agent fix the bug with **zero human input**. |
+| 🖥️ **Live reasoning UI** | Every tool call streams to the dashboard over SSE as the agent works. |
+
+## 🛡️ Built to never die on stage: dual-mode by design
+
+Every external integration has a real path **and** a high-fidelity fallback that
+returns the *identical* data shape — so a missing credential degrades gracefully
+instead of breaking the demo:
+
+| Layer | Live mode | Fallback mode |
+|---|---|---|
+| **Agent brain** | Vertex AI / Gemini **function calling** | Deterministic planner that still runs the **real tool calls** end-to-end |
+| **GitLab actions** | `python-gitlab` against gitlab.com (real MRs) | Stateful in-memory simulation where the fix genuinely turns the pipeline green |
+| **Grounding** | Vertex AI Search data store | In-process keyword search over the local runbooks |
+| **Memory** | Firestore | In-memory store |
+
+The active mode is shown live as a badge in the dashboard nav. Drop in a token →
+it upgrades automatically, no code change.
 
 ## 🏗️ Architecture
 
-- **Agent Engine**: Google Cloud Agent Builder (Gemini 2.5)
-- **Integration**: GitLab MCP Server (`@modelcontextprotocol/server-gitlab`)
-- **Backend**: Python FastAPI (deployed on Cloud Run)
-- **Frontend**: HTML/CSS/JS (served by FastAPI)
-- **Grounding**: Vertex AI Search Datastore (World Cup Runbooks)
+```
+Browser dashboard ──SSE──▶ FastAPI backend ──▶ AgentService (reason→act→observe loop)
+   (live action feed)         (Cloud Run)            │
+                                                     ├─▶ GitLabToolExecutor  → GitLab (MCP / API)
+                                                     ├─▶ GroundingService    → Vertex AI Search / runbooks
+                                                     └─▶ MemoryService       → Firestore / in-memory
+```
 
-See `docs/ARCHITECTURE.md` for a detailed diagram.
+- **Agent loop**: `backend/services/agent_service.py` — Gemini/Vertex function calling + scripted planner
+- **GitLab actions**: `backend/services/gitlab_tools.py` — branches, commits, MRs, issues, pipeline runs
+- **Grounding**: `backend/services/grounding_service.py` — cited runbook retrieval
+- **Streaming API**: `POST /api/agent/chat/stream` (SSE), `GET /api/agent/mode`
+- **Frontend**: `frontend/` — dark command-center dashboard (vanilla HTML/CSS/JS)
 
-## 🚀 Setup Instructions
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the detailed flow.
 
-### 1. Prerequisites
-- A Google Cloud Project with the Discovery Engine API enabled.
-- A GitLab Personal Access Token (`api`, `read_repository`, `write_repository` scopes).
-- Python 3.10+ and Node.js (for `npx`).
+## 🚀 Quick start
 
-### 2. Local Development
 ```bash
-# Clone the repo
-git clone https://github.com/your-username/Google-Cloud-Rapid-Agent.git
-cd Google-Cloud-Rapid-Agent
-
-# Setup Python backend
 cd backend
 python -m venv venv
-source venv/bin/activate  # (or venv\Scripts\activate on Windows)
+source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 
-# Configure environment
+# (Optional) configure live credentials — works fully without them
 cp ../.env.example ../.env
-# Edit ../.env with your GCP details and GitLab Token
 
-# Run the server
-uvicorn main:app --reload --port 8080
+# Run it
+python -m uvicorn main:app --reload --port 8137
 ```
-Visit `http://localhost:8080` to access the Copa Agent dashboard.
 
-### 3. Deploy to Cloud Run
-Use the included script to deploy the agent:
+Open **http://localhost:8137** and try a quick action, or type:
+> *"The ticketing API pipeline is failing — investigate and fix it."*
+
+Watch the agent triage, fix, open MR **!18**, and turn the pipeline green — live.
+
+### Going live (optional)
+Set these in `.env` to upgrade from simulation to real services:
+- `GITLAB_PERSONAL_ACCESS_TOKEN` + `GITLAB_GROUP_PATH` → real branches/MRs on gitlab.com
+- `GOOGLE_CLOUD_PROJECT` (+ ADC) → Vertex AI agent brain
+- `VERTEX_SEARCH_DATASTORE_ID` → Vertex AI Search grounding
+
+## ✅ Tests
+
+```bash
+cd backend && pytest tests/ -v      # 12 tests, all green, no credentials needed
+```
+
+Includes the headline guarantee (`test_fix_then_rerun_turns_pipeline_green`) and a
+negative control proving an unfixed branch still fails.
+
+## 🚢 Deploy to Cloud Run
+
 ```bash
 bash scripts/deploy_cloud_run.sh
 ```
 
 ## 🎥 Demo
 
-Check out our 3-minute demo video showing the agent auto-fixing a pipeline failure and orchestrating a Match Day deployment! (Link provided in Devpost).
+See [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md) for the 90-second walkthrough.
 
 ## 📄 License
 
-MIT License. See `LICENSE` for more information.
+MIT — see [`LICENSE`](LICENSE).

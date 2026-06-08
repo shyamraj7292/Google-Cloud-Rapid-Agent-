@@ -4,9 +4,11 @@ Handles chat sessions with the Agent Builder agent.
 """
 
 import os
+import json
 import uuid
 import logging
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from services.agent_service import AgentService
@@ -79,6 +81,55 @@ async def chat(request: ChatRequest):
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """
+    Stream the agent's reason→act→observe loop as Server-Sent Events.
+
+    Emits one SSE `data:` line per event:
+      {type: "status", text}            — a short "thinking" line
+      {type: "action", tool, description, status, result}  — a tool just ran
+      {type: "reply",  reply}           — the final assistant message
+      {type: "done"}                    — stream complete
+
+    This is what lets the UI show Copa Agent *working*, step by step, live.
+    """
+    session_id = request.session_id or str(uuid.uuid4())
+
+    async def event_generator():
+        # Tell the client its session id up front.
+        yield f"data: {json.dumps({'type': 'session', 'session_id': session_id})}\n\n"
+        await memory_svc.save_message(session_id, "user", request.message)
+        final_reply = ""
+        try:
+            async for ev in agent_svc.run_stream(request.message, session_id):
+                if ev.get("type") == "reply":
+                    final_reply = ev.get("reply", "")
+                yield f"data: {json.dumps(ev)}\n\n"
+        except Exception as e:
+            logger.error(f"Stream error: {e}")
+            yield f"data: {json.dumps({'type': 'reply', 'reply': f'⚠️ Agent error: {e}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        if final_reply:
+            await memory_svc.save_message(session_id, "assistant", final_reply)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "Connection": "keep-alive"},
+    )
+
+
+@router.get("/mode")
+async def agent_mode():
+    """Expose which backend + GitLab mode is active (shown as a badge in the UI)."""
+    return {
+        "agent_backend": agent_svc.mode,
+        "gitlab_mode": agent_svc.tools.mode,
+        "model": agent_svc.model_name,
+    }
 
 
 @router.get("/sessions/{session_id}/history")
