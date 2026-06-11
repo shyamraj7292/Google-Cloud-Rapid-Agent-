@@ -6,18 +6,22 @@ to the Google Cloud Agent Builder agent with GitLab MCP integration.
 
 import os
 import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 
-from routes.agent import router as agent_router
+# Load environment variables before importing routes — those modules construct
+# AgentService()/GitLabToolExecutor() at import time and read GITLAB_*/GOOGLE_*
+# env vars in their constructors, so .env must be loaded first or the live
+# token/model config is silently missed and everything falls back to simulation.
+load_dotenv()
+
+from routes.agent import router as agent_router, agent_svc
 from routes.dashboard import router as dashboard_router
 from routes.webhooks import router as webhooks_router
-
-# Load environment variables
-load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -26,18 +30,52 @@ logging.basicConfig(
 )
 logger = logging.getLogger("copa-agent")
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    FastAPI lifespan handler — runs once at startup and once at shutdown.
+
+    Startup: connect the GitLab MCP server (npx @modelcontextprotocol/server-gitlab)
+    so that subsequent tool calls can route through the real MCP protocol.
+    If the MCP server fails to start (no Node/npx, network error, bad token) the
+    agent degrades gracefully to python-gitlab for write ops and simulation for
+    everything else — it never crashes.
+
+    Shutdown: cleanly close the stdio subprocess and MCP session.
+    """
+    # --- startup ---
+    try:
+        logger.info("Startup: connecting GitLab MCP server…")
+        await agent_svc.tools.init_mcp()
+        if agent_svc.tools.mcp and agent_svc.tools.mcp.available:
+            logger.info("✅ GitLab MCP server ready — agent mode is 'mcp+live'.")
+        else:
+            logger.info("ℹ️  GitLab MCP server not available — using python-gitlab fallback.")
+    except Exception as e:
+        logger.warning(f"MCP startup error (non-fatal): {e}")
+    yield
+    # --- shutdown ---
+    try:
+        await agent_svc.tools.stop_mcp()
+        logger.info("GitLab MCP server disconnected.")
+    except Exception:
+        pass
+
+
 # Create FastAPI app
 app = FastAPI(
     title="Copa Agent API",
     description="AI DevOps Commander for FIFA World Cup 2026 — powered by Gemini + GitLab MCP",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS configuration
 cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins + ["*"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

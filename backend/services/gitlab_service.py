@@ -45,34 +45,53 @@ class GitLabService:
         """Get all World Cup projects with latest pipeline status."""
         if self.gl and self.group_path:
             try:
-                group = self.gl.groups.get(self.group_path)
-                projects = group.projects.list(all=True)
-                
+                # Support user namespaces (not just groups)
+                try:
+                    ns = self.gl.groups.get(self.group_path)
+                    raw_projects = ns.projects.list(get_all=True)
+                    project_ids = [p.id for p in raw_projects]
+                except Exception:
+                    all_owned = self.gl.projects.list(owned=True, get_all=True)
+                    project_ids = [p.id for p in all_owned
+                                   if p.namespace.get("path", "") == self.group_path]
+
                 result = []
-                for proj in projects:
-                    full_proj = self.gl.projects.get(proj.id)
-                    pipelines = full_proj.pipelines.list(per_page=1)
-                    latest_pipeline = None
-                    if pipelines:
-                        p = pipelines[0]
-                        latest_pipeline = {
-                            "id": p.id,
-                            "status": p.status,
-                            "ref": p.ref,
-                            "created_at": p.created_at,
-                            "web_url": p.web_url
-                        }
-                    
-                    result.append({
-                        "id": full_proj.id,
-                        "name": full_proj.name,
-                        "path": full_proj.path_with_namespace,
-                        "web_url": full_proj.web_url,
-                        "latest_pipeline": latest_pipeline,
-                        "open_mrs": full_proj.mergerequests.list(state="opened", per_page=1, get_all=False).__len__(),
-                        "open_issues": full_proj.issues.list(state="opened", per_page=1, get_all=False).__len__(),
-                    })
-                
+                for pid in project_ids:
+                    try:
+                        full_proj = self.gl.projects.get(pid)
+                        pipelines = full_proj.pipelines.list(per_page=1)
+                        latest_pipeline = None
+                        if pipelines:
+                            p = pipelines[0]
+                            latest_pipeline = {
+                                "id": p.id,
+                                "status": p.status,
+                                "ref": p.ref,
+                                "created_at": p.created_at,
+                                "web_url": p.web_url
+                            }
+                        # Last 5 pipeline statuses for sparkline
+                        history = []
+                        for p in full_proj.pipelines.list(per_page=5):
+                            history.append(p.status)
+
+                        open_mrs = len(full_proj.mergerequests.list(state="opened", per_page=5, get_all=False))
+                        open_issues = len(full_proj.issues.list(state="opened", per_page=5, get_all=False))
+
+                        result.append({
+                            "id": full_proj.id,
+                            "name": full_proj.name,
+                            "path": full_proj.path_with_namespace,
+                            "web_url": full_proj.web_url,
+                            "description": getattr(full_proj, "description", "") or "",
+                            "latest_pipeline": latest_pipeline,
+                            "pipeline_history": history,
+                            "open_mrs": open_mrs,
+                            "open_issues": open_issues,
+                        })
+                    except Exception as e:
+                        logger.warning(f"Skipping project {pid}: {e}")
+
                 return result
             except Exception as e:
                 logger.error(f"Error fetching GitLab projects: {e}")

@@ -16,7 +16,7 @@ install:
   stage: install
   image: node:${NODE_VERSION}-slim
   script:
-    - npm ci
+    - npm install
 
 test:
   stage: test

@@ -29,3 +29,4 @@ Thumbs.db
 # Google Cloud
 service-account-key.json
 credentials.json
+gcp-service-account.json

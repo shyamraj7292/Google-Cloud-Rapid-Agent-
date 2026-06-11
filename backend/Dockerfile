@@ -1,16 +1,20 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+# Node.js is required for the GitLab MCP server (@modelcontextprotocol/server-gitlab)
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install dependencies
-COPY requirements.txt .
+WORKDIR /app/backend
+
+# Install Python dependencies
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY . .
-
-# Copy frontend for static serving
-COPY ../frontend /app/frontend
+# Copy application code, preserving the backend/frontend sibling layout
+COPY backend/ .
+COPY frontend/ /app/frontend
 
 EXPOSE 8080
 

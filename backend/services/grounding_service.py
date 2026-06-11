@@ -140,9 +140,12 @@ class GroundingService:
             snippet = ""
             if "snippets" in data and data["snippets"]:
                 snippet = data["snippets"][0].get("snippet", "")
+            link = data.get("link", "")
+            if not snippet:
+                snippet = f"See {link or doc.name.split('/')[-1]} for details."
             citations.append({
                 "source": data.get("title", doc.name.split("/")[-1]),
-                "section": data.get("link", ""),
+                "section": link,
                 "snippet": snippet[:500],
             })
         return {"ok": True, "mode": "vertex", "citations": citations}

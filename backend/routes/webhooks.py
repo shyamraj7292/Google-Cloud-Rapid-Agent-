@@ -3,26 +3,31 @@ Copa Agent — GitLab Webhook Routes
 Receives GitLab webhook events and auto-triggers agent triage on failures.
 """
 
+import os
 import logging
 from fastapi import APIRouter, Request, HTTPException
-from services.agent_service import AgentService
+from routes.agent import agent_svc
 
 logger = logging.getLogger("copa-agent.routes.webhooks")
 router = APIRouter()
 
-agent_svc = AgentService()
+GITLAB_WEBHOOK_SECRET = os.getenv("GITLAB_WEBHOOK_SECRET", "")
 
 
 @router.post("/gitlab")
 async def gitlab_webhook(request: Request):
     """
     Handle GitLab webhook events.
-    
+
     Supported events:
     - Pipeline failures → Auto-triage with Copa Agent
     - Merge request events → Notify and summarize
     - Push events → Track deployments
     """
+    if GITLAB_WEBHOOK_SECRET:
+        token = request.headers.get("X-Gitlab-Token", "")
+        if token != GITLAB_WEBHOOK_SECRET:
+            raise HTTPException(status_code=401, detail="Invalid webhook token")
     try:
         payload = await request.json()
         event_type = payload.get("object_kind", "unknown")

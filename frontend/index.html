@@ -4,25 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Copa Agent ⚽ — World Cup 2026 DevOps Command Center</title>
-    <meta name="description" content="AI-powered DevOps command center for FIFA World Cup 2026 — manage pipelines, triage failures, and orchestrate deployments with Copa Agent.">
-    
+    <meta name="description" content="AI-powered DevOps command center for FIFA World Cup 2026 — powered by Gemini, Google Cloud Agent Builder, and GitLab MCP.">
+
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-    
+
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-    
+
     <!-- Styles -->
     <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/mission-control.css">
 </head>
 <body>
-    <!-- Top Navigation Bar -->
+
+    <!-- ═══════════════════════════════════════════════════════
+         TOP NAVIGATION
+         ═══════════════════════════════════════════════════════ -->
     <header id="top-nav" class="top-nav">
         <div class="nav-left">
             <div class="logo">
-                <span class="logo-icon">⚽</span>
+                <div class="logo-icon">⚽</div>
                 <span class="logo-text">Copa Agent</span>
                 <span class="logo-badge">AI DevOps</span>
             </div>
@@ -30,59 +34,124 @@
         <div class="nav-center">
             <div class="platform-status" id="platform-status">
                 <div class="status-dot status-dot--healthy"></div>
-                <span>Platform Health: <strong id="health-pct">67%</strong></span>
+                <span>Platform Health: <strong id="health-pct">—</strong></span>
             </div>
         </div>
         <div class="nav-right">
+            <!-- Auto-Guardian toggle -->
+            <div class="guardian-toggle" id="guardian-toggle" title="Auto-Guardian: autonomous pipeline monitoring">
+                <span class="guardian-label">Auto-Guardian</span>
+                <div class="toggle-switch" id="guardian-switch">
+                    <div class="toggle-knob"></div>
+                </div>
+            </div>
             <span class="engine-badge" id="engine-badge" title="Active agent + GitLab backend">● connecting…</span>
             <button class="nav-btn" id="btn-refresh" title="Refresh Data">
                 <i data-lucide="refresh-cw" class="icon-sm"></i>
             </button>
-            <button class="nav-btn" id="btn-settings" title="Settings">
-                <i data-lucide="settings" class="icon-sm"></i>
-            </button>
-            <div class="nav-avatar" title="World Cup Ops Team">
-                <span>WC</span>
-            </div>
+            <div class="nav-avatar" title="World Cup Ops Team">WC</div>
         </div>
     </header>
 
-    <!-- Main Layout -->
+    <!-- ═══════════════════════════════════════════════════════
+         MISSION CONTROL BANNER
+         ═══════════════════════════════════════════════════════ -->
+    <div class="mission-control-bar" id="mission-control">
+
+        <!-- Countdown -->
+        <div class="mc-card mc-card--countdown" id="mc-countdown-card">
+            <div class="mc-card-icon-wrap">
+                <span class="mc-card-emoji">⏱</span>
+            </div>
+            <div class="mc-card-body">
+                <div class="mc-card-value" id="mc-countdown">2d 00h 00m</div>
+                <div class="mc-card-label">Until Kickoff · Jun 11</div>
+            </div>
+            <span class="mc-urgency-badge" id="mc-urgency">CRITICAL</span>
+        </div>
+
+        <!-- Venues -->
+        <div class="mc-card">
+            <div class="mc-card-icon-wrap"><span class="mc-card-emoji">🏟</span></div>
+            <div class="mc-card-body">
+                <div class="mc-card-value counter" data-target="16" id="mc-venues">16</div>
+                <div class="mc-card-label">Venues Monitored</div>
+            </div>
+        </div>
+
+        <!-- Services Green -->
+        <div class="mc-card" id="mc-health-card">
+            <div class="mc-card-icon-wrap"><span class="mc-card-emoji" id="mc-health-icon">📡</span></div>
+            <div class="mc-card-body">
+                <div class="mc-card-value" id="mc-health">—</div>
+                <div class="mc-card-label">Services Green</div>
+            </div>
+        </div>
+
+        <!-- Auto-fixed -->
+        <div class="mc-card">
+            <div class="mc-card-icon-wrap"><span class="mc-card-emoji">⚡</span></div>
+            <div class="mc-card-body">
+                <div class="mc-card-value" id="mc-fixed">0</div>
+                <div class="mc-card-label">Auto-Fixed by AI</div>
+            </div>
+        </div>
+
+        <!-- Tech Stack -->
+        <div class="mc-card mc-card--tech">
+            <div class="mc-tech-stack">
+                <span class="mc-tech-badge mc-tech-badge--gemini">✦ Gemini 2.0</span>
+                <span class="mc-tech-badge mc-tech-badge--gcp">☁ Agent Builder</span>
+                <span class="mc-tech-badge mc-tech-badge--mcp">⬡ GitLab MCP</span>
+            </div>
+            <div class="mc-card-label" style="margin-top:6px">Powered By</div>
+        </div>
+
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+         MAIN LAYOUT
+         ═══════════════════════════════════════════════════════ -->
     <main class="main-layout">
-        <!-- Left Panel: Agent Chat -->
+
+        <!-- ─── Left: Agent Chat ─── -->
         <aside id="chat-panel" class="chat-panel">
             <div class="panel-header">
                 <h2>
                     <i data-lucide="bot" class="icon-md"></i>
-                    Agent Chat
+                    Copa Agent
+                    <span class="live-dot"></span>
                 </h2>
-                <button class="btn-icon" id="btn-clear-chat" title="Clear Chat">
-                    <i data-lucide="trash-2" class="icon-sm"></i>
-                </button>
+                <div style="display:flex;gap:6px;align-items:center">
+                    <span class="agent-mode-chip" id="agent-mode-chip">gemini</span>
+                    <button class="btn-icon" id="btn-clear-chat" title="Clear Chat">
+                        <i data-lucide="trash-2" class="icon-sm"></i>
+                    </button>
+                </div>
             </div>
 
             <div id="chat-messages" class="chat-messages">
-                <!-- Welcome message -->
                 <div class="chat-message chat-message--agent">
                     <div class="message-avatar">⚽</div>
                     <div class="message-content">
                         <div class="message-sender">Copa Agent</div>
                         <div class="message-text">
-                            Welcome to the World Cup 2026 DevOps Command Center! I'm Copa Agent, your AI DevOps commander. I can triage pipeline failures, deploy services, create merge requests, and more.<br><br>
-                            Try asking me:<br>
-                            • <em>"What's the status of all pipelines?"</em><br>
-                            • <em>"The ticketing API pipeline is failing"</em><br>
-                            • <em>"Deploy all services for MetLife Stadium"</em>
+                            🏆 <strong>World Cup 2026 kicks off in 2 days.</strong> I'm your AI DevOps commander — I don't just chat, I <em>act</em> on GitLab using real MCP tools.<br><br>
+                            Try a quick action ↗ or type a mission:<br>
+                            • <em>"The ticketing pipeline is failing"</em> → I triage, fix &amp; open an MR<br>
+                            • <em>"Deploy all for MetLife"</em> → I verify all green, then deploy<br>
+                            • <em>"What's our platform health?"</em> → live status across every repo
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Action Feed (shows tool calls in real-time) -->
+            <!-- Live Action Feed (tool calls streaming in real-time) -->
             <div id="action-feed" class="action-feed hidden">
                 <div class="action-feed-header">
                     <i data-lucide="zap" class="icon-sm"></i>
-                    <span>Actions</span>
+                    <span>Agent Working</span>
+                    <div class="spinner" style="margin-left:auto"></div>
                 </div>
                 <div id="action-feed-items" class="action-feed-items"></div>
             </div>
@@ -90,55 +159,77 @@
             <!-- Chat Input -->
             <div class="chat-input-container">
                 <div class="chat-input-wrapper">
-                    <textarea 
-                        id="chat-input" 
+                    <textarea
+                        id="chat-input"
                         class="chat-input"
-                        placeholder="Ask Copa Agent to take action..."
+                        placeholder="Give Copa Agent a mission…"
                         rows="1"
                     ></textarea>
-                    <button id="btn-send" class="btn-send" title="Send Message">
+                    <button id="btn-send" class="btn-send" title="Send">
                         <i data-lucide="send" class="icon-sm"></i>
                     </button>
                 </div>
                 <div class="chat-input-hints">
-                    <span>Press <kbd>Enter</kbd> to send • <kbd>Shift+Enter</kbd> for new line</span>
+                    <kbd>Enter</kbd> send &nbsp;·&nbsp; <kbd>Shift+Enter</kbd> new line
                 </div>
             </div>
         </aside>
 
-        <!-- Right Panel: Dashboard -->
+        <!-- ─── Right: Dashboard ─── -->
         <section id="dashboard-panel" class="dashboard-panel">
-            <!-- Quick Actions Bar -->
+
+            <!-- Quick Actions -->
             <div class="quick-actions" id="quick-actions">
-                <button class="quick-action-btn" data-action="triage" id="qa-triage">
+                <button class="quick-action-btn" data-action="triage">
                     <i data-lucide="search" class="icon-md"></i>
-                    <span>Triage Failures</span>
+                    <div class="qa-text">
+                        <span class="qa-title">Triage Failures</span>
+                        <span class="qa-sub">Find &amp; fix failing pipelines</span>
+                    </div>
                 </button>
-                <button class="quick-action-btn" data-action="deploy" id="qa-deploy">
+                <button class="quick-action-btn" data-action="deploy">
                     <i data-lucide="rocket" class="icon-md"></i>
-                    <span>Deploy All</span>
+                    <div class="qa-text">
+                        <span class="qa-title">Match Day Deploy</span>
+                        <span class="qa-sub">Verify all green → deploy</span>
+                    </div>
                 </button>
-                <button class="quick-action-btn" data-action="status" id="qa-status">
+                <button class="quick-action-btn" data-action="status">
                     <i data-lucide="activity" class="icon-md"></i>
-                    <span>Platform Status</span>
+                    <div class="qa-text">
+                        <span class="qa-title">Platform Status</span>
+                        <span class="qa-sub">Live health across all repos</span>
+                    </div>
                 </button>
-                <button class="quick-action-btn" data-action="sprint" id="qa-sprint">
+                <button class="quick-action-btn" data-action="sprint">
                     <i data-lucide="kanban" class="icon-md"></i>
-                    <span>Sprint Summary</span>
+                    <div class="qa-text">
+                        <span class="qa-title">Sprint Summary</span>
+                        <span class="qa-sub">Issues, velocity &amp; MRs</span>
+                    </div>
                 </button>
             </div>
 
-            <!-- Pipeline Status Grid -->
+            <!-- Pipeline Health -->
             <div class="dashboard-section" id="pipeline-section">
                 <div class="section-header">
                     <h3>
                         <i data-lucide="git-branch" class="icon-md"></i>
                         Pipeline Health
                     </h3>
-                    <span class="section-badge" id="pipeline-count">3 services</span>
+                    <div style="display:flex;align-items:center;gap:10px">
+                        <div class="readiness-bar-wrap" id="readiness-bar-wrap" title="Match-day readiness">
+                            <div class="readiness-bar-fill" id="readiness-bar-fill"></div>
+                        </div>
+                        <span class="readiness-label" id="readiness-label">—% ready</span>
+                        <span class="section-badge" id="pipeline-count">loading…</span>
+                    </div>
                 </div>
                 <div id="pipeline-grid" class="pipeline-grid">
-                    <!-- Pipeline cards rendered by JS -->
+                    <div class="pipeline-loading">
+                        <div class="spinner"></div>
+                        <span>Fetching live GitLab data…</span>
+                    </div>
                 </div>
             </div>
 
@@ -147,13 +238,14 @@
                 <div class="section-header">
                     <h3>
                         <i data-lucide="clock" class="icon-md"></i>
-                        Recent Agent Actions
+                        Agent Action Log
                     </h3>
+                    <span class="section-badge" id="actions-count">0 actions</span>
                 </div>
                 <div id="actions-timeline" class="actions-timeline">
                     <div class="timeline-empty">
                         <i data-lucide="bot" class="icon-lg"></i>
-                        <p>No actions yet. Ask Copa Agent to do something!</p>
+                        <p>No actions yet — give Copa Agent a mission above!</p>
                     </div>
                 </div>
             </div>
@@ -171,14 +263,12 @@
                         <span class="legend-item"><span class="legend-dot legend-dot--pending"></span>Pending</span>
                     </div>
                 </div>
-                <div id="venue-grid" class="venue-grid">
-                    <!-- Venue cards rendered by JS -->
-                </div>
+                <div id="venue-grid" class="venue-grid"></div>
             </div>
+
         </section>
     </main>
 
-    <!-- Scripts -->
-    <script src="js/app.js"></script>
+    <script src="js/app.js?v=3"></script>
 </body>
 </html>

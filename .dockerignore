@@ -1,0 +1,12 @@
+backend/venv
+backend/__pycache__
+backend/gcp-service-account.json
+.env
+.git
+.gitignore
+gitlab-repos
+agent/datastores
+node_modules
+**/__pycache__
+**/*.pyc
+*.md

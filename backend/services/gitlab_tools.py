@@ -156,7 +156,19 @@ def _fresh_sim_state() -> dict:
 
 
 class GitLabToolExecutor:
-    """Executes the concrete GitLab tool calls the agent decides to make."""
+    """
+    Executes the concrete GitLab tool calls the agent decides to make.
+
+    Hybrid MCP + python-gitlab design:
+      • Write operations (get_file_contents, create_branch, create_or_update_file,
+        create_merge_request, create_issue) are routed through the official GitLab
+        MCP server (@modelcontextprotocol/server-gitlab) when available — satisfying
+        the hackathon's "Partner Power / MCP integration" requirement.
+      • Pipeline operations (list_pipelines, list_pipeline_jobs, get_pipeline_job_log,
+        run_pipeline, get_platform_status) are not covered by the official MCP server
+        and continue to use python-gitlab directly.
+      • Everything falls back to the stateful SIMULATION if no token is present.
+    """
 
     def __init__(self):
         self.token = os.getenv("GITLAB_PERSONAL_ACCESS_TOKEN", "")
@@ -165,6 +177,7 @@ class GitLabToolExecutor:
         self.gl = None
         self.mode = "simulation"
         self._sim = _fresh_sim_state()
+        self.mcp = None  # MCPGitLabClient — set via async init_mcp()
 
         if GITLAB_SDK_AVAILABLE and self.token and not self.token.startswith("glpat-xxxx"):
             try:
@@ -181,6 +194,24 @@ class GitLabToolExecutor:
 
         if self.mode == "simulation":
             logger.info("GitLab tool executor: SIMULATION mode (no live token).")
+
+    async def init_mcp(self):
+        """Start the MCP client (called once at app startup from lifespan)."""
+        if self.mode != "live":
+            return
+        try:
+            from services.mcp_client import MCPGitLabClient
+            self.mcp = MCPGitLabClient(self.token, self.api_url, self.group_path)
+            await self.mcp.start()
+            if self.mcp.available:
+                self.mode = "mcp+live"
+                logger.info("GitLab mode: MCP+LIVE (write ops via MCP, pipeline ops via API).")
+        except Exception as e:
+            logger.warning(f"MCP client init failed: {e} — staying in LIVE mode.")
+
+    async def stop_mcp(self):
+        if self.mcp:
+            await self.mcp.stop()
 
     # -- helpers -------------------------------------------------------------
     def _resolve_project_path(self, project: str) -> str:
@@ -202,7 +233,7 @@ class GitLabToolExecutor:
 
     def list_pipelines(self, project: str, limit: int = 5) -> dict:
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        if self.mode in ("live", "mcp+live"):
             try:
                 proj = self.gl.projects.get(path)
                 pls = proj.pipelines.list(per_page=limit, get_all=False)
@@ -222,7 +253,7 @@ class GitLabToolExecutor:
 
     def list_pipeline_jobs(self, project: str, pipeline_id: int) -> dict:
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        if self.mode in ("live", "mcp+live"):
             try:
                 proj = self.gl.projects.get(path)
                 pl = proj.pipelines.get(pipeline_id)
@@ -246,7 +277,7 @@ class GitLabToolExecutor:
 
     def get_pipeline_job_log(self, project: str, job_name: str, pipeline_id: Optional[int] = None) -> dict:
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        if self.mode in ("live", "mcp+live"):
             try:
                 proj = self.gl.projects.get(path)
                 pl = proj.pipelines.get(pipeline_id) if pipeline_id else proj.pipelines.list(per_page=1)[0]
@@ -267,9 +298,17 @@ class GitLabToolExecutor:
                     return self._ok(project=path, job_name=job_name, log=j["log"])
         return self._err(f"No log available for job '{job_name}'")
 
-    def get_file_contents(self, project: str, file_path: str, ref: str = "main") -> dict:
+    async def get_file_contents(self, project: str, file_path: str, ref: str = "main") -> dict:
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        # MCP path — preferred when available
+        if self.mcp and self.mcp.available:
+            result = await self.mcp.get_file_contents(project, file_path, ref)
+            if result.get("ok"):
+                # Normalize: MCP returns decoded content in the JSON blob
+                content = result.get("content", result.get("result", ""))
+                return self._ok(project=path, file_path=file_path, content=content, via="mcp")
+        # python-gitlab fallback
+        if self.mode in ("live", "mcp+live") and self.gl:
             try:
                 proj = self.gl.projects.get(path)
                 f = proj.files.get(file_path=file_path, ref=ref)
@@ -285,9 +324,16 @@ class GitLabToolExecutor:
             return self._err(f"File '{file_path}' not found in {path}")
         return self._ok(project=path, file_path=file_path, content=content)
 
-    def create_branch(self, project: str, branch: str, ref: str = "main") -> dict:
+    async def create_branch(self, project: str, branch: str, ref: str = "main") -> dict:
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        # MCP path
+        if self.mcp and self.mcp.available:
+            result = await self.mcp.create_branch(project, branch, ref)
+            if result.get("ok"):
+                return self._ok(project=path, branch=branch, via="mcp",
+                                web_url=f"https://gitlab.com/{path}/-/tree/{branch}")
+        # python-gitlab fallback
+        if self.mode in ("live", "mcp+live") and self.gl:
             try:
                 proj = self.gl.projects.get(path)
                 b = proj.branches.create({"branch": branch, "ref": ref})
@@ -302,10 +348,18 @@ class GitLabToolExecutor:
         return self._ok(project=path, branch=branch, created_from=ref,
                         web_url=f"https://gitlab.com/{path}/-/tree/{branch}")
 
-    def create_or_update_file(self, project: str, file_path: str, content: str,
-                              branch: str, commit_message: str) -> dict:
+    async def create_or_update_file(self, project: str, file_path: str, content: str,
+                                     branch: str, commit_message: str) -> dict:
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        # MCP path
+        if self.mcp and self.mcp.available:
+            result = await self.mcp.create_or_update_file(
+                project, file_path, content, commit_message, branch)
+            if result.get("ok"):
+                return self._ok(project=path, file_path=file_path,
+                                branch=branch, commit_message=commit_message, via="mcp")
+        # python-gitlab fallback
+        if self.mode in ("live", "mcp+live") and self.gl:
             try:
                 proj = self.gl.projects.get(path)
                 try:
@@ -325,17 +379,26 @@ class GitLabToolExecutor:
         if not proj:
             return self._err(f"Unknown project '{path}'")
         proj.setdefault("branch_files", {}).setdefault(branch, {})[file_path] = content
-        # Record that this branch now carries a fix (used by re-run-pipeline).
         proj.setdefault("fixed_branches", set())
         if "TOKEN_EXPIRY_SECONDS = 3600" in content:
             proj["fixed_branches"].add(branch)
         return self._ok(project=path, file_path=file_path, branch=branch,
                         commit_message=commit_message)
 
-    def create_merge_request(self, project: str, source_branch: str, title: str,
-                             description: str = "", target_branch: str = "main") -> dict:
+    async def create_merge_request(self, project: str, source_branch: str, title: str,
+                                    description: str = "", target_branch: str = "main") -> dict:
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        # MCP path
+        if self.mcp and self.mcp.available:
+            result = await self.mcp.create_merge_request(
+                project, title, source_branch, target_branch, description)
+            if result.get("ok"):
+                iid = result.get("iid", result.get("mr_iid", "?"))
+                web_url = result.get("web_url", f"https://gitlab.com/{path}/-/merge_requests/{iid}")
+                return self._ok(project=path, mr_iid=iid, title=title,
+                                web_url=web_url, via="mcp")
+        # python-gitlab fallback
+        if self.mode in ("live", "mcp+live") and self.gl:
             try:
                 proj = self.gl.projects.get(path)
                 mr = proj.mergerequests.create({
@@ -357,10 +420,19 @@ class GitLabToolExecutor:
         proj["merge_requests"].append(mr)
         return self._ok(project=path, mr_iid=iid, title=title, web_url=mr["web_url"])
 
-    def create_issue(self, project: str, title: str, description: str = "",
-                     labels: Optional[list] = None) -> dict:
+    async def create_issue(self, project: str, title: str, description: str = "",
+                            labels: Optional[list] = None) -> dict:
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        # MCP path
+        if self.mcp and self.mcp.available:
+            result = await self.mcp.create_issue(project, title, description, labels)
+            if result.get("ok"):
+                iid = result.get("iid", result.get("issue_iid", "?"))
+                web_url = result.get("web_url", f"https://gitlab.com/{path}/-/issues/{iid}")
+                return self._ok(project=path, issue_iid=iid, title=title,
+                                web_url=web_url, via="mcp")
+        # python-gitlab fallback
+        if self.mode in ("live", "mcp+live") and self.gl:
             try:
                 proj = self.gl.projects.get(path)
                 issue = proj.issues.create({
@@ -387,7 +459,7 @@ class GitLabToolExecutor:
         green; anything else reproduces the original failure — so the agent can
         *prove* its fix worked."""
         path = self._resolve_project_path(project)
-        if self.mode == "live":
+        if self.mode in ("live", "mcp+live"):
             try:
                 proj = self.gl.projects.get(path)
                 pl = proj.pipelines.create({"ref": ref})
@@ -408,15 +480,27 @@ class GitLabToolExecutor:
 
     def get_platform_status(self) -> dict:
         """Aggregate latest pipeline status across all World Cup repos."""
-        if self.mode == "live":
+        if self.mode in ("live", "mcp+live"):
             try:
-                group = self.gl.groups.get(self.group_path)
                 rows = []
-                for p in group.projects.list(get_all=True):
-                    full = self.gl.projects.get(p.id)
+                # Support both group namespaces and personal user namespaces.
+                # Try group first; fall back to listing owned projects filtered by namespace.
+                try:
+                    group = self.gl.groups.get(self.group_path)
+                    project_ids = [p.id for p in group.projects.list(get_all=True)]
+                except Exception:
+                    # User namespace — list owned projects and filter by namespace path
+                    all_projects = self.gl.projects.list(owned=True, get_all=True)
+                    project_ids = [
+                        p.id for p in all_projects
+                        if p.namespace.get("path", "") == self.group_path
+                    ]
+                for pid in project_ids:
+                    full = self.gl.projects.get(pid)
                     pls = full.pipelines.list(per_page=1, get_all=False)
                     latest = pls[0].status if pls else "unknown"
-                    rows.append({"project": full.path_with_namespace, "status": latest})
+                    rows.append({"project": full.path_with_namespace, "status": latest,
+                                 "web_url": full.web_url})
                 return self._ok(projects=rows)
             except Exception as e:
                 return self._err(f"get_platform_status failed: {e}")

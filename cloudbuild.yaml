@@ -1,0 +1,11 @@
+steps:
+  - name: "gcr.io/cloud-builders/docker"
+    args:
+      - "build"
+      - "-f"
+      - "backend/Dockerfile"
+      - "-t"
+      - "us-central1-docker.pkg.dev/focus-reality-470916-d0/copa-agent-repo/copa-agent:latest"
+      - "."
+images:
+  - "us-central1-docker.pkg.dev/focus-reality-470916-d0/copa-agent-repo/copa-agent:latest"

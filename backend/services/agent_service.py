@@ -9,7 +9,7 @@ done. Every step is surfaced to the UI as it happens.
 
 Three execution backends, chosen automatically:
 
-  1. "gemini"   — google-generativeai with native function calling. The model
+  1. "gemini"   — google-genai (new SDK) with native function calling. The model
                   drives the loop; we execute each requested tool and return the
                   result until it stops calling tools.
 
@@ -28,6 +28,7 @@ import os
 import re
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional, AsyncGenerator
 
@@ -37,8 +38,8 @@ from services.grounding_service import GroundingService
 logger = logging.getLogger("copa-agent.services.agent")
 
 try:
-    import google.generativeai as genai
-    from google.generativeai.types import content_types
+    from google import genai
+    from google.genai import types as genai_types
     GENAI_AVAILABLE = True
 except ImportError:
     GENAI_AVAILABLE = False
@@ -177,7 +178,7 @@ class AgentService:
         self.vertex_model = None
 
         # Prefer Vertex (full GCP) → Gemini API key → scripted.
-        if VERTEX_AVAILABLE and self.project_id and not self.api_key:
+        if VERTEX_AVAILABLE and self.project_id and not self.project_id.startswith("your-") and not self.api_key:
             try:
                 vertexai.init(project=self.project_id, location=self.location)
                 vx_tool = Vx_Tool(function_declarations=[
@@ -194,16 +195,16 @@ class AgentService:
             except Exception as e:
                 logger.warning(f"Vertex init failed: {e}")
 
-        if self.mode == "scripted" and GENAI_AVAILABLE and self.api_key:
+        if self.mode == "scripted" and GENAI_AVAILABLE and self.api_key and not self.api_key.startswith("your-"):
             try:
-                genai.configure(api_key=self.api_key)
-                self.genai_model = genai.GenerativeModel(
-                    self.model_name,
+                self.genai_client = genai.Client(api_key=self.api_key)
+                self._genai_tool = genai_types.Tool(function_declarations=TOOL_SCHEMAS)
+                self._genai_config = genai_types.GenerateContentConfig(
                     system_instruction=self._system_prompt(),
-                    tools=[{"function_declarations": TOOL_SCHEMAS}],
+                    tools=[self._genai_tool],
                 )
                 self.mode = "gemini"
-                logger.info(f"Agent backend: GEMINI ({self.model_name}).")
+                logger.info(f"Agent backend: GEMINI/{self.model_name} (google-genai SDK).")
             except Exception as e:
                 logger.warning(f"Gemini init failed: {e}")
 
@@ -233,13 +234,19 @@ class AgentService:
         )
 
     # -- tool dispatch -------------------------------------------------------
-    def _execute_tool(self, name: str, args: dict) -> dict:
+    async def _execute_tool(self, name: str, args: dict) -> dict:
         if name == "search_runbooks":
             return self.grounding.search(args.get("query", ""))
         fn = getattr(self.tools, name, None)
         if not fn:
             return {"ok": False, "error": f"Unknown tool '{name}'"}
         try:
+            # The 5 write/read ops (get_file_contents, create_branch,
+            # create_or_update_file, create_merge_request, create_issue) are
+            # now async to support the MCP path — await them; everything else
+            # (list_pipelines, run_pipeline, …) stays synchronous.
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(**args)
             return fn(**args)
         except TypeError as e:
             return {"ok": False, "error": f"Bad arguments for {name}: {e}"}
@@ -315,13 +322,16 @@ class AgentService:
                 reply = ev["reply"]
         return {"reply": reply, "actions": actions, "timestamp": _now()}
 
-    # -- Gemini backend ------------------------------------------------------
+    # -- Gemini backend (google-genai SDK) -----------------------------------
     async def _run_gemini(self, message: str, session_id: str):
         sessions = getattr(self, "_gemini_sessions", None)
         if sessions is None:
             sessions = self._gemini_sessions = {}
         if session_id not in sessions:
-            sessions[session_id] = self.genai_model.start_chat()
+            sessions[session_id] = self.genai_client.chats.create(
+                model=self.model_name,
+                config=self._genai_config,
+            )
         chat = sessions[session_id]
 
         try:
@@ -333,17 +343,18 @@ class AgentService:
                 tool_responses = []
                 for name, args in calls:
                     yield {"type": "status", "text": f"Calling {name}…", "timestamp": _now()}
-                    result = self._execute_tool(name, args)
+                    result = await self._execute_tool(name, args)
                     yield {
                         "type": "action", "tool": name,
                         "description": self._humanize(name, args, result),
                         "status": "completed" if result.get("ok") else "failed",
                         "result": json.dumps(result)[:400], "timestamp": _now(),
                     }
-                    tool_responses.append(content_types.to_function_response(
-                        name, {"result": result}) if hasattr(content_types, "to_function_response")
-                        else genai.protos.Part(function_response=genai.protos.FunctionResponse(
-                            name=name, response={"result": result})))
+                    tool_responses.append(
+                        genai_types.Part.from_function_response(
+                            name=name, response={"result": result}
+                        )
+                    )
                 response = chat.send_message(tool_responses)
             final = self._safe_text(response) or "Done. ⚽"
             yield {"type": "reply", "reply": final, "timestamp": _now()}
@@ -368,8 +379,10 @@ class AgentService:
             return response.text.strip()
         except Exception:
             try:
-                return "".join(p.text for p in response.candidates[0].content.parts
-                               if getattr(p, "text", "")).strip()
+                return "".join(
+                    p.text for p in response.candidates[0].content.parts
+                    if getattr(p, "text", "")
+                ).strip()
             except Exception:
                 return ""
 
@@ -392,7 +405,7 @@ class AgentService:
                 for fc in fcs:
                     name, args = fc.name, dict(fc.args)
                     yield {"type": "status", "text": f"Calling {name}…", "timestamp": _now()}
-                    result = self._execute_tool(name, args)
+                    result = await self._execute_tool(name, args)
                     yield {
                         "type": "action", "tool": name,
                         "description": self._humanize(name, args, result),
@@ -418,7 +431,7 @@ class AgentService:
         msg = message.lower()
 
         async def act(name, args):
-            result = self._execute_tool(name, args)
+            result = await self._execute_tool(name, args)
             return {
                 "type": "action", "tool": name,
                 "description": self._humanize(name, args, result),

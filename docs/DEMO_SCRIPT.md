@@ -4,11 +4,13 @@ A tight, judge-ready walkthrough. Everything below works in **simulation mode**
 with no credentials — and identically when live creds are present.
 
 ## Setup (before recording)
-1. `cd backend && python -m uvicorn main:app --port 8137`
-2. Open **http://localhost:8137**, clear chat.
-3. Note the **engine badge** in the top-right nav (e.g. *"● Demo Engine · GitLab sim"* →
-   *"● Vertex AI · GitLab LIVE"* when credentials are set). Point this out — it shows
-   the same code runs locally and in production.
+1. Open the **live hosted demo**: https://copa-agent-256475641367.us-central1.run.app
+   (deployed on Google Cloud Run — no local setup needed). Clear the chat if needed.
+   Alternatively run locally: `cd backend && python -m uvicorn main:app --port 8137`
+   and open **http://localhost:8137**.
+2. Note the **engine badge** in the top-right nav: *"● Gemini · GitLab MCP+LIVE"* —
+   point this out, it shows the agent is reasoning with Gemini 2.0 Flash and acting
+   on real GitLab projects via the Model Context Protocol, grounded by Vertex AI Search.
 
 ---
 

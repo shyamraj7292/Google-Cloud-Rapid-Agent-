@@ -2,6 +2,13 @@
 
 **Built for the "Building Agents for Real-World Challenges" Hackathon (GitLab Track)**
 
+## 🌐 Live Demo
+
+**https://copa-agent-256475641367.us-central1.run.app**
+
+Deployed on Google Cloud Run, running live against real GitLab projects via MCP,
+grounded by Vertex AI Search, powered by Gemini 2.0 Flash.
+
 Copa Agent is a true **action-taking AI agent** — not a chatbot — that acts as an
 autonomous DevOps co-pilot for the teams building the infrastructure behind the
 2026 FIFA World Cup (48 teams, 104 matches, 16 venues across 3 countries).
@@ -11,7 +18,7 @@ reads the CI logs, grounds itself in your team's runbooks, **writes the actual
 code fix**, opens a Merge Request, and re-runs the pipeline to prove it's green —
 all streamed to a live command-center dashboard, step by step.
 
-> Powered by **Google Cloud (Gemini 2.5 / Vertex AI)** and the **GitLab MCP server**.
+> Powered by **Google Cloud (Gemini 2.0 Flash / Vertex AI Search)** and the **GitLab MCP server**.
 
 ---
 
@@ -99,9 +106,22 @@ negative control proving an unfixed branch still fails.
 
 ## 🚢 Deploy to Cloud Run
 
+Build and push the image with Cloud Build, then deploy:
+
 ```bash
-bash scripts/deploy_cloud_run.sh
+gcloud builds submit --config=cloudbuild.yaml --project=<PROJECT_ID> .
+
+gcloud run deploy copa-agent \
+  --image us-central1-docker.pkg.dev/<PROJECT_ID>/copa-agent-repo/copa-agent:latest \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --service-account <SERVICE_ACCOUNT_EMAIL> \
+  --project <PROJECT_ID> \
+  --set-env-vars="..."
 ```
+
+(`scripts/deploy_cloud_run.sh` is an alternative single-command path if the
+`gcloud` CLI source-deploy buildpack is preferred.)
 
 ## 🎥 Demo
 

@@ -17,7 +17,7 @@ install:
   stage: install
   image: node:${NODE_VERSION}-slim
   script:
-    - npm ci
+    - npm install
   artifacts:
     paths:
       - node_modules/

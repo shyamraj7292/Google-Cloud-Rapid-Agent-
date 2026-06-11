@@ -1,0 +1,476 @@
+/* ============================================================
+   Copa Agent — Mission Control UI
+   World Cup 2026 command-center additions
+   ============================================================ */
+
+/* ── Mission Control Banner ── */
+.mission-control-bar {
+  position: sticky;
+  top: 60px;
+  z-index: 900;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 1fr 1.6fr;
+  gap: 0;
+  background: rgba(4, 10, 24, 0.96);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 4px 40px rgba(0,0,0,0.5);
+}
+
+.mc-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 20px;
+  border-right: 1px solid rgba(255,255,255,0.05);
+  transition: background 200ms ease;
+  position: relative;
+  overflow: hidden;
+}
+.mc-card:last-child { border-right: none; }
+.mc-card:hover { background: rgba(255,255,255,0.02); }
+
+/* Countdown card — red urgency */
+.mc-card--countdown {
+  background: rgba(255, 55, 55, 0.06);
+  border-right-color: rgba(255, 71, 87, 0.15) !important;
+}
+.mc-card--countdown::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, #ff4757, #ff6b81, transparent);
+  animation: urgencyPulse 2s ease-in-out infinite;
+}
+@keyframes urgencyPulse {
+  0%,100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+
+.mc-card-icon-wrap {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.05);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  font-size: 20px;
+}
+.mc-card--countdown .mc-card-icon-wrap {
+  background: rgba(255,71,87,0.12);
+}
+
+.mc-card-body { flex: 1; min-width: 0; }
+
+.mc-card-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 1.18rem;
+  font-weight: 700;
+  color: #e8ecf4;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.mc-card--countdown .mc-card-value {
+  color: #ff6b6b;
+  text-shadow: 0 0 20px rgba(255,71,87,0.3);
+}
+
+.mc-card-label {
+  font-size: 0.68rem;
+  color: #5a637a;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+
+.mc-urgency-badge {
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  padding: 3px 8px;
+  background: rgba(255,71,87,0.18);
+  color: #ff4757;
+  border: 1px solid rgba(255,71,87,0.3);
+  border-radius: 999px;
+  animation: urgencyPulse 1.5s ease-in-out infinite;
+}
+
+/* Tech stack card */
+.mc-card--tech {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.mc-tech-stack {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mc-tech-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.mc-tech-badge--gemini {
+  background: rgba(0,200,255,0.1);
+  color: #4dd9fa;
+  border: 1px solid rgba(0,200,255,0.2);
+}
+.mc-tech-badge--gcp {
+  background: rgba(66,133,244,0.1);
+  color: #7db3f8;
+  border: 1px solid rgba(66,133,244,0.2);
+}
+.mc-tech-badge--mcp {
+  background: rgba(252,106,3,0.1);
+  color: #fc6a03;
+  border: 1px solid rgba(252,106,3,0.25);
+}
+
+/* ── Layout adjustment (banner takes up 2 sticky rows) ── */
+.main-layout {
+  /* nav=60px + banner~68px */
+  margin-top: 0;
+}
+
+/* ── Guardian Toggle ── */
+.guardian-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 4px 10px;
+  border: 1px solid rgba(255,255,255,0.07);
+  border-radius: 999px;
+  transition: all 200ms;
+}
+.guardian-toggle:hover { border-color: rgba(0,255,135,0.3); }
+.guardian-label {
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: #5a637a;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+.toggle-switch {
+  width: 32px; height: 18px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.1);
+  position: relative;
+  transition: all 250ms;
+}
+.toggle-switch.active {
+  background: rgba(0,255,135,0.25);
+  border-color: rgba(0,255,135,0.4);
+}
+.toggle-knob {
+  position: absolute;
+  width: 12px; height: 12px;
+  border-radius: 999px;
+  background: #5a637a;
+  top: 2px; left: 2px;
+  transition: all 250ms;
+}
+.toggle-switch.active .toggle-knob {
+  background: #00ff87;
+  transform: translateX(14px);
+  box-shadow: 0 0 8px rgba(0,255,135,0.5);
+}
+
+/* ── Agent mode chip in panel header ── */
+.agent-mode-chip {
+  font-size: 0.6rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(0,255,135,0.08);
+  color: #00ff87;
+  border: 1px solid rgba(0,255,135,0.2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* live dot on panel header */
+.live-dot {
+  display: inline-block;
+  width: 7px; height: 7px;
+  border-radius: 999px;
+  background: #00ff87;
+  box-shadow: 0 0 6px rgba(0,255,135,0.6);
+  animation: pulse 2s ease-in-out infinite;
+  margin-left: 4px;
+}
+
+/* ── Improved Quick Action Buttons ── */
+.quick-action-btn {
+  flex-direction: column;
+  gap: 4px !important;
+  padding: 14px 12px !important;
+  align-items: flex-start !important;
+}
+.quick-action-btn .icon-md {
+  color: var(--accent-green);
+  margin-bottom: 4px;
+}
+.qa-text { display: flex; flex-direction: column; gap: 1px; }
+.qa-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); }
+.qa-sub   { font-size: 0.68rem; color: var(--text-muted); }
+
+/* ── Readiness bar in pipeline section header ── */
+.readiness-bar-wrap {
+  width: 80px; height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.readiness-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #ff4757, #ffa502, #00ff87);
+  background-size: 200% 100%;
+  background-position: 100% 0;
+  width: 0%;
+  transition: width 600ms ease, background-position 600ms ease;
+}
+.readiness-bar-fill.full { background-position: 0% 0; }
+
+.readiness-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+}
+
+/* ── Improved Pipeline Cards ── */
+.pipeline-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pipeline-card-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.pipeline-tag {
+  font-size: 0.62rem;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.pipeline-tag--mr {
+  background: rgba(77,171,247,0.1);
+  color: #4dabf7;
+  border: 1px solid rgba(77,171,247,0.2);
+}
+.pipeline-tag--issue {
+  background: rgba(255,159,67,0.1);
+  color: #ff9f43;
+  border: 1px solid rgba(255,159,67,0.2);
+}
+
+/* Pipeline history sparkline */
+.pipeline-sparkline {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+  margin-top: 4px;
+}
+.spark-dot {
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.spark-dot--success  { background: #00ff87; opacity: 0.85; }
+.spark-dot--failed   { background: #ff4757; opacity: 0.85; }
+.spark-dot--running  { background: #4dabf7; opacity: 0.85; }
+.spark-dot--canceled { background: #5a637a; opacity: 0.6; }
+.spark-dot--pending  { background: #ffa502; opacity: 0.6; }
+.spark-dot--unknown  { background: #5a637a; opacity: 0.4; }
+
+.pipeline-card-link {
+  font-size: 0.68rem;
+  color: var(--accent-blue);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  opacity: 0.7;
+  transition: opacity 150ms;
+}
+.pipeline-card-link:hover { opacity: 1; text-decoration: none; }
+
+/* "Fix with Copa Agent" button on failed cards */
+.pipeline-fix-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 7px;
+  background: rgba(255,71,87,0.08);
+  border: 1px solid rgba(255,71,87,0.2);
+  border-radius: 8px;
+  color: #ff6b6b;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 200ms;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  letter-spacing: 0.03em;
+}
+.pipeline-fix-btn:hover {
+  background: rgba(255,71,87,0.16);
+  border-color: rgba(255,71,87,0.4);
+  color: #ff4757;
+}
+
+/* Pipeline loading state */
+.pipeline-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  grid-column: 1 / -1;
+}
+
+/* ── Improved Timeline items ── */
+.timeline-item {
+  display: grid;
+  grid-template-columns: 52px 28px 1fr;
+  align-items: start;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.timeline-tool-chip {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(0,255,135,0.07);
+  color: #00ff87;
+  margin-bottom: 2px;
+  font-weight: 600;
+}
+.timeline-tool-chip--failed {
+  background: rgba(255,71,87,0.08);
+  color: #ff6b6b;
+}
+
+/* ── Action Feed improvements ── */
+.action-feed {
+  border-top: 1px solid rgba(255,255,255,0.06);
+  max-height: 160px;
+  overflow-y: auto;
+  background: rgba(0,255,135,0.02);
+}
+.action-feed-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #00ff87;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+  position: sticky;
+  top: 0;
+  background: rgba(4,10,24,0.95);
+}
+.action-feed-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px;
+  font-size: 0.74rem;
+  color: #8b95a8;
+  font-family: 'JetBrains Mono', monospace;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  animation: slideInUp 0.25s ease-out;
+}
+.action-feed-item .af-icon { font-size: 13px; flex-shrink: 0; }
+.action-feed-item .af-tool { color: #00ff87; font-weight: 600; }
+.action-feed-item .af-desc { color: #8b95a8; }
+.action-feed-item.af-failed .af-tool { color: #ff6b6b; }
+
+@keyframes slideInUp {
+  from { opacity:0; transform: translateY(4px); }
+  to   { opacity:1; transform: translateY(0); }
+}
+
+/* ── Chat panel header ── */
+.panel-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-secondary);
+}
+
+/* ── Responsive adjustments for new banner ── */
+@media (max-width: 1200px) {
+  .mission-control-bar { grid-template-columns: 1.8fr 1fr 1fr 1fr; }
+  .mc-card--tech { display: none; }
+}
+@media (max-width: 900px) {
+  .mission-control-bar { grid-template-columns: 1fr 1fr 1fr; }
+  .mc-card--countdown .mc-urgency-badge { display: none; }
+}
+@media (max-width: 640px) {
+  .mission-control-bar { grid-template-columns: 1fr 1fr; }
+  .mc-card:nth-child(4) { display: none; }
+}
+
+/* ── Glow animation for auto-fixed counter when it increments ── */
+.mc-card-value.flash {
+  animation: valuePop 0.5s ease-out;
+}
+@keyframes valuePop {
+  0%   { color: #00ff87; text-shadow: 0 0 20px rgba(0,255,135,0.8); transform: scale(1.15); }
+  100% { color: inherit; text-shadow: none; transform: scale(1); }
+}
+
+/* ── Agent thinking steps in chat ── */
+.thinking-steps {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.thinking-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: #5a637a;
+  font-family: 'JetBrains Mono', monospace;
+  padding: 3px 0;
+  animation: fadeIn 0.3s ease;
+}
+.thinking-step.active { color: #00ff87; }
+.thinking-step.done   { color: #4dabf7; }
+.step-icon { font-size: 12px; flex-shrink: 0; }
+
+/* ── Actions count badge ── */
+#actions-count {
+  transition: all 200ms;
+}

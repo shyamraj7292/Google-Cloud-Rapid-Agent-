@@ -1,0 +1,10 @@
+{
+  "name": "worldcup-stadium-dashboard",
+  "version": "1.0.0",
+  "description": "FIFA World Cup 2026 — Real-time Stadium Operations Dashboard",
+  "scripts": {
+    "start": "node src/app.js",
+    "test": "node tests/test_app.js",
+    "build": "node -e \"require('fs').mkdirSync('dist', {recursive:true}); require('fs').writeFileSync('dist/index.html', '<h1>Stadium Dashboard</h1>')\""
+  }
+}
