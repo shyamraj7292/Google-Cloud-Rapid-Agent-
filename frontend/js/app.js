@@ -64,6 +64,7 @@ const QUICK_MSGS = {
   deploy: 'Deploy all services for MetLife Stadium — there\'s a match tonight. Follow the match day protocol.',
   status: 'Show me the overall pipeline health and status across all World Cup repos.',
   sprint: 'Generate a sprint summary: open issues, velocity, and merge request stats.',
+  surge: 'Kickoff is starting at MetLife Stadium and fans are flooding in — check traffic, and scale up if there\'s a surge.',
 };
 
 const TOOL_ICONS = {
@@ -71,6 +72,8 @@ const TOOL_ICONS = {
   get_file_contents: '📂', create_branch: '🌿', create_or_update_file: '✏️',
   create_merge_request: '🔀', create_issue: '📌', run_pipeline: '🚀',
   get_platform_status: '📡', search_runbooks: '📖',
+  write_runbook_entry: '🧠', create_postmortem: '📄',
+  get_stadium_traffic: '📈', scale_service: '⚙️',
 };
 
 // ── DOM cache ───────────────────────────────────────────────
@@ -414,6 +417,10 @@ async function streamFromAgent(message, typingEl) {
         if (ev.tool === 'create_merge_request' && ev.status === 'completed') {
           incrementFixed();
         }
+      } else if (ev.type === 'approval_request') {
+        if (!actionShown) { showActionFeed(true); actionShown = true; }
+        addApprovalCard(ev);
+        setThinking('⏸️ Waiting for your approval…');
       } else if (ev.type === 'reply') {
         removeElement(typingEl);
         addChatMessage('agent', renderMarkdown(ev.reply));
@@ -502,6 +509,42 @@ function addActionFeedItem(action) {
     <span class="af-desc">— ${action.description}</span>`;
   DOM.actionFeedItems.appendChild(el);
   DOM.actionFeedItems.scrollTop = DOM.actionFeedItems.scrollHeight;
+}
+
+// ── Human-in-the-loop approval ──────────────────────────────────
+function addApprovalCard(ev) {
+  if (!DOM.actionFeedItems) return;
+  const icon = TOOL_ICONS[ev.tool] || '⚙️';
+  const card = document.createElement('div');
+  card.className = 'action-feed-item af-approval';
+  card.innerHTML = `
+    <span class="af-icon">${icon}</span>
+    <span class="af-tool">⏸️ Approval needed</span>
+    <span class="af-desc">— ${ev.description}</span>
+    <div class="af-approval-buttons">
+      <button class="btn-approve" type="button">✅ Approve</button>
+      <button class="btn-reject" type="button">⛔ Reject</button>
+    </div>`;
+  DOM.actionFeedItems.appendChild(card);
+  DOM.actionFeedItems.scrollTop = DOM.actionFeedItems.scrollHeight;
+
+  const buttons = card.querySelector('.af-approval-buttons');
+  const decide = async (approved) => {
+    buttons.innerHTML = approved
+      ? '<span class="af-decision">✅ Approved</span>'
+      : '<span class="af-decision">⛔ Rejected</span>';
+    try {
+      await fetch(`${CONFIG.API_BASE}/agent/approvals/${ev.approval_id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved }),
+      });
+    } catch (err) {
+      console.error('Approval request failed:', err);
+    }
+  };
+  card.querySelector('.btn-approve').addEventListener('click', () => decide(true));
+  card.querySelector('.btn-reject').addEventListener('click', () => decide(false));
 }
 
 // ── Timeline ──────────────────────────────────────────────────

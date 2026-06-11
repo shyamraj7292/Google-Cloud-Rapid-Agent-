@@ -27,6 +27,7 @@ All three yield the identical event stream, so routes/UI are backend-agnostic.
 import os
 import re
 import json
+import uuid
 import logging
 import asyncio
 from datetime import datetime, timezone
@@ -159,7 +160,52 @@ TOOL_SCHEMAS = [
             "query": {"type": "string", "description": "What you need guidance on, e.g. 'unit test AssertionError fix'."},
         }, "required": ["query"]},
     },
+    {
+        "name": "write_runbook_entry",
+        "description": ("Document a NEW fix pattern back into the team's runbooks so future incidents "
+                        "of this type are covered. Use this AFTER a fix when search_runbooks did not "
+                        "return a good citation for the issue you just resolved — this is how the "
+                        "agent gets smarter over time."),
+        "parameters": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "Short heading for the new playbook section, e.g. 'Token Expiry Misconfiguration'."},
+            "content": {"type": "string", "description": "Markdown body: symptom, root cause, fix steps, and prevention."},
+            "source": {"type": "string", "description": "Which playbook file to append to (without extension). Defaults to 'pipeline_playbooks'."},
+        }, "required": ["title", "content"]},
+    },
+    {
+        "name": "get_stadium_traffic",
+        "description": ("Match Day Simulator: check real-time fan traffic / request-rate metrics "
+                        "for a stadium's services (ticketing, dashboard, fan app). Use this to "
+                        "detect demand surges around kickoff."),
+        "parameters": {"type": "object", "properties": {
+            "stadium": {"type": "string", "description": "Stadium name, e.g. 'MetLife Stadium'."},
+        }, "required": ["stadium"]},
+    },
+    {
+        "name": "scale_service",
+        "description": ("Scale a service's replica count to handle increased load. Use this when "
+                        "get_stadium_traffic reports a surge that puts a service at risk."),
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string"},
+            "replicas": {"type": "integer", "description": "New replica/instance count."},
+        }, "required": ["project", "replicas"]},
+    },
+    {
+        "name": "create_postmortem",
+        "description": ("Publish a structured incident postmortem (timeline, root cause, fix, "
+                        "prevention) as a GitLab wiki page. Use this AFTER an autonomous fix has "
+                        "been applied and verified."),
+        "parameters": {"type": "object", "properties": {
+            "project": {"type": "string"},
+            "title": {"type": "string", "description": "Postmortem title, e.g. 'Postmortem: Ticketing API Auth Token Expiry'."},
+            "content": {"type": "string", "description": "Full markdown postmortem with ## Timeline, ## Root Cause, ## Fix, ## Prevention sections."},
+        }, "required": ["project", "title", "content"]},
+    },
 ]
+
+# Tools that pause for human approval before executing — risky/irreversible
+# actions. The dashboard must explicitly approve or reject before they run.
+GATED_TOOLS = {"create_merge_request", "run_pipeline", "scale_service"}
 
 
 class AgentService:
@@ -176,6 +222,11 @@ class AgentService:
         self.mode = "scripted"
         self.genai_model = None
         self.vertex_model = None
+
+        # Human-in-the-loop approval gates for risky tools (create_merge_request,
+        # run_pipeline). Keyed by approval_id.
+        self._pending_approvals: dict[str, asyncio.Event] = {}
+        self._approval_decisions: dict[str, bool] = {}
 
         # Prefer Vertex (full GCP) → Gemini API key → scripted.
         if VERTEX_AVAILABLE and self.project_id and not self.project_id.startswith("your-") and not self.api_key:
@@ -230,13 +281,39 @@ class AgentService:
             "offending file, create a `fix/...` branch, commit the corrected file, open "
             "a merge request, and run the pipeline on the branch to prove it passes. "
             "Reference project names without the group prefix (e.g. 'worldcup-ticketing-api'). "
-            "When you have completed the work, give a concise final summary with the MR link."
+            "When you have completed the work, give a concise final summary with the MR link.\n\n"
+            "## Self-Improving Runbooks\n"
+            "If `search_runbooks` returns no good citation for the issue you're fixing, call "
+            "`write_runbook_entry` AFTER the fix is verified to document the symptom, root cause, "
+            "fix steps, and prevention — so the same issue is grounded next time.\n\n"
+            "## Postmortems\n"
+            "After an autonomous fix has been applied and the pipeline re-run, call "
+            "`create_postmortem` to publish a structured wiki page with ## Timeline, ## Root Cause, "
+            "## Fix, and ## Prevention sections, and link to it in your final summary.\n\n"
+            "## Human Approval\n"
+            "`create_merge_request`, `run_pipeline`, and `scale_service` require operator approval — "
+            "when you call them, execution will pause until a human approves or rejects in the "
+            "dashboard. If rejected, acknowledge it and stop rather than retrying the same action.\n\n"
+            "## Match Day Simulator\n"
+            "When asked about a traffic surge, crowd, kickoff, or stadium load, call "
+            "`get_stadium_traffic` to check fan request rates. If it reports a surge, check "
+            "`get_platform_status` for the affected service's health, then propose and call "
+            "`scale_service` to add replicas. Tie your narration to the World Cup match-day stakes."
         )
 
     # -- tool dispatch -------------------------------------------------------
     async def _execute_tool(self, name: str, args: dict) -> dict:
         if name == "search_runbooks":
             return self.grounding.search(args.get("query", ""))
+        if name == "write_runbook_entry":
+            return self.grounding.write_entry(
+                args.get("source", "pipeline_playbooks"),
+                args.get("title", "Untitled"),
+                args.get("content", ""),
+            )
+        if name == "create_postmortem":
+            return await self.tools.create_wiki_page(
+                args.get("project", ""), args.get("title", "Postmortem"), args.get("content", ""))
         fn = getattr(self.tools, name, None)
         if not fn:
             return {"ok": False, "error": f"Unknown tool '{name}'"}
@@ -288,7 +365,85 @@ class AgentService:
             top = cits[0] if cits else None
             return (f"Grounded in runbook: {top['source']} › {top['section']}"
                     if top else "Searched runbooks (no match)")
+        if name == "write_runbook_entry":
+            return f"📖 Documented new playbook entry: '{args.get('title')}' → {result.get('source')}.md"
+        if name == "create_postmortem":
+            return f"📄 Published postmortem wiki page: '{args.get('title')}'"
+        if name == "get_stadium_traffic":
+            if result.get("surge"):
+                return (f"⚡ Traffic surge at {args.get('stadium')}: "
+                        f"{result.get('requests_per_sec')} req/s "
+                        f"({result.get('surge_factor')}x baseline)")
+            return f"Checked traffic at {args.get('stadium')} — normal levels ({result.get('requests_per_sec')} req/s)"
+        if name == "scale_service":
+            return (f"Scaled {args.get('project')} to {result.get('replicas')} replicas "
+                    f"(was {result.get('previous_replicas')})")
         return f"Executed {name}"
+
+    @staticmethod
+    def _humanize_pending(name: str, args: dict) -> str:
+        """Description of a tool call awaiting human approval, before it runs."""
+        if name == "create_merge_request":
+            return (f"Open a merge request on '{args.get('project')}': "
+                    f"{args.get('source_branch')} → {args.get('target_branch', 'main')} "
+                    f"— \"{args.get('title')}\"")
+        if name == "run_pipeline":
+            return f"Run the CI/CD pipeline on '{args.get('project')}' branch '{args.get('ref')}'"
+        if name == "scale_service":
+            return f"Scale '{args.get('project')}' to {args.get('replicas')} replicas"
+        return f"Execute {name}"
+
+    # -- human-in-the-loop approval gate -------------------------------------
+    def resolve_approval(self, approval_id: str, approved: bool) -> bool:
+        event = self._pending_approvals.get(approval_id)
+        if not event:
+            return False
+        self._approval_decisions[approval_id] = approved
+        event.set()
+        return True
+
+    async def _gated_execute(self, name: str, args: dict, session_id: str):
+        """Execute a tool, optionally pausing for human approval first.
+
+        Yields ("event", event_dict) for each event to surface to the UI, and
+        finally ("result", result_dict) with the tool's result.
+        """
+        if name in GATED_TOOLS:
+            approval_id = str(uuid.uuid4())
+            description = self._humanize_pending(name, args)
+            event = asyncio.Event()
+            self._pending_approvals[approval_id] = event
+            yield ("event", {
+                "type": "approval_request", "approval_id": approval_id, "tool": name,
+                "args": args, "description": description, "session_id": session_id,
+                "timestamp": _now(),
+            })
+            try:
+                await asyncio.wait_for(event.wait(), timeout=180)
+                approved = self._approval_decisions.pop(approval_id, False)
+            except asyncio.TimeoutError:
+                approved = False
+            finally:
+                self._pending_approvals.pop(approval_id, None)
+            if not approved:
+                result = {"ok": False, "error": "Action rejected by operator — not executed.",
+                          "approval": "rejected"}
+                yield ("event", {
+                    "type": "action", "tool": name,
+                    "description": f"⛔ Rejected by operator: {description}",
+                    "status": "rejected", "result": json.dumps(result)[:400], "timestamp": _now(),
+                })
+                yield ("result", result)
+                return
+            yield ("event", {"type": "status", "text": f"✅ Approved — executing {name}…", "timestamp": _now()})
+        result = await self._execute_tool(name, args)
+        yield ("event", {
+            "type": "action", "tool": name,
+            "description": self._humanize(name, args, result),
+            "status": "completed" if result.get("ok") else "failed",
+            "result": json.dumps(result)[:400], "timestamp": _now(),
+        })
+        yield ("result", result)
 
     # ========================================================================
     #  PUBLIC: streaming agent run
@@ -343,13 +498,12 @@ class AgentService:
                 tool_responses = []
                 for name, args in calls:
                     yield {"type": "status", "text": f"Calling {name}…", "timestamp": _now()}
-                    result = await self._execute_tool(name, args)
-                    yield {
-                        "type": "action", "tool": name,
-                        "description": self._humanize(name, args, result),
-                        "status": "completed" if result.get("ok") else "failed",
-                        "result": json.dumps(result)[:400], "timestamp": _now(),
-                    }
+                    result = {}
+                    async for kind, payload in self._gated_execute(name, args, session_id):
+                        if kind == "event":
+                            yield payload
+                        else:
+                            result = payload
                     tool_responses.append(
                         genai_types.Part.from_function_response(
                             name=name, response={"result": result}
@@ -439,6 +593,7 @@ class AgentService:
                 "result": json.dumps(result)[:400], "timestamp": _now(),
             }, result
 
+
         # --- Triage & auto-fix the failing pipeline -------------------------
         if re.search(r"pipeline|fail|broken|triage|investigat|fix|ticket", msg):
             project = "worldcup-ticketing-api"
@@ -487,7 +642,8 @@ class AgentService:
                                   "venue gates before security clearance. Restores 1-hour validity."})
             yield ev
 
-            ev, mr_res = await act("create_merge_request", {
+            mr_res = {}
+            async for kind, payload in self._gated_execute("create_merge_request", {
                 "project": project, "source_branch": branch,
                 "title": "fix(auth): restore token expiry to 3600s (1 hour)",
                 "description": ("## 🔍 Root Cause\n`TOKEN_EXPIRY_SECONDS` was `360` (6 minutes) instead "
@@ -496,15 +652,81 @@ class AgentService:
                                 "the gates on match day.\n\n## ✅ Fix\nRestored `TOKEN_EXPIRY_SECONDS = "
                                 "3600`. The failing test `test_token_expiry_constant` now passes.\n\n"
                                 "_Auto-generated by Copa Agent ⚽ following the Pipeline Triage Workflow._"),
-                "target_branch": "main"})
-            yield ev
+                "target_branch": "main"}, session_id):
+                if kind == "event":
+                    yield payload
+                else:
+                    mr_res = payload
+            if mr_res.get("approval") == "rejected":
+                yield {"type": "reply", "timestamp": _now(), "reply": (
+                    "⛔ **Triage paused.** I diagnosed the root cause (`TOKEN_EXPIRY_SECONDS` was "
+                    "`360` instead of `3600`) and prepared the fix on branch "
+                    f"`{branch}`, but the merge request was **rejected by the operator** before "
+                    "opening. No further action taken.")}
+                return
 
-            ev, run_res = await act("run_pipeline", {"project": project, "ref": branch})
-            yield ev
+            run_res = {}
+            async for kind, payload in self._gated_execute(
+                    "run_pipeline", {"project": project, "ref": branch}, session_id):
+                if kind == "event":
+                    yield payload
+                else:
+                    run_res = payload
 
             mr_link = mr_res.get("web_url", "#")
             mr_iid = mr_res.get("mr_iid", "?")
             verdict = "✅ **green**" if run_res.get("status") == "success" else "🔄 running"
+
+            # --- Self-improving runbooks: document this fix pattern if it
+            # wasn't already covered by a citation. ---------------------------
+            runbook_line = ""
+            if not citations:
+                ev, _ = await act("write_runbook_entry", {
+                    "title": "Auth Token Expiry Misconfiguration (TOKEN_EXPIRY_SECONDS)",
+                    "content": (
+                        "**Symptom:** `unit_test` job fails with an assertion error on the token "
+                        "expiry constant; fans get logged out before clearing venue security.\n\n"
+                        "**Root cause:** `TOKEN_EXPIRY_SECONDS` set to `360` (6 minutes) instead of "
+                        "`3600` (1 hour) — a missing-zero typo in `app/main.py`.\n\n"
+                        "**Fix:** Restore `TOKEN_EXPIRY_SECONDS = 3600`, commit to a `fix/` branch, "
+                        "open an MR, and re-run the pipeline to confirm `test_token_expiry_constant` "
+                        "passes.\n\n"
+                        "**Prevention:** Add a CI assertion that `TOKEN_EXPIRY_SECONDS >= 3600` and "
+                        "alert if the gate-entry auth-failure rate spikes."),
+                })
+                yield ev
+                runbook_line = "\n\n🧠 **Learned:** wrote a new playbook entry so this fix pattern is grounded next time."
+
+            # --- Incident postmortem -------------------------------------------
+            postmortem_link = ""
+            ev, pm_res = await act("create_postmortem", {
+                "project": project,
+                "title": "Postmortem: Ticketing API Auth Token Expiry",
+                "content": (
+                    "## Timeline\n"
+                    f"- Pipeline #{pid} failed on the `unit_test` job\n"
+                    "- Copa Agent triaged the failure, read the job log and the offending file\n"
+                    f"- Created branch `{branch}` with the corrected constant\n"
+                    f"- Opened MR !{mr_iid} with full root-cause writeup\n"
+                    f"- Re-ran the pipeline on `{branch}` → {verdict}\n\n"
+                    "## Root Cause\n"
+                    "`TOKEN_EXPIRY_SECONDS` in `app/main.py` was `360` (6 minutes) instead of `3600` "
+                    "(1 hour) — a missing-zero typo. Fans' auth tokens expired before they cleared "
+                    "venue security, locking them out at the gates on match day.\n\n"
+                    "## Fix\n"
+                    f"Restored `TOKEN_EXPIRY_SECONDS = 3600` in `app/main.py` on branch `{branch}`, "
+                    f"opened MR !{mr_iid}, and re-ran the pipeline to confirm "
+                    "`test_token_expiry_constant` passes.\n\n"
+                    "## Prevention\n"
+                    "- Add a CI assertion enforcing `TOKEN_EXPIRY_SECONDS >= 3600`\n"
+                    "- Alert on spikes in gate-entry auth failures\n"
+                    "- New playbook entry added so future agents ground this fix in one step\n\n"
+                    "_Auto-generated by Copa Agent ⚽_"),
+            })
+            yield ev
+            if pm_res.get("ok"):
+                postmortem_link = f"\n\n📄 **Postmortem:** [{pm_res.get('title')}]({pm_res.get('web_url', '#')})"
+
             yield {"type": "reply", "timestamp": _now(), "reply": (
                 f"🔍 **Pipeline triage complete — and fixed.**\n\n"
                 f"**Root cause:** `TOKEN_EXPIRY_SECONDS` in `app/main.py` was `360` (6 min) instead of "
@@ -514,10 +736,70 @@ class AgentService:
                 f"1. Found failed pipeline #{pid} and the failing `unit_test` job\n"
                 f"2. Read the job log and pinpointed the assertion failure\n"
                 f"3. Created branch `{branch}` and committed the corrected constant\n"
-                f"4. Opened **[MR !{mr_iid}]({mr_link})** with full root-cause writeup\n"
+                f"4. Opened **[MR !{mr_iid}]({mr_link})** with full root-cause writeup (operator-approved)\n"
                 f"5. Re-ran the pipeline on the fix branch → {verdict}"
-                f"{cite_line}\n\n"
+                f"{cite_line}{runbook_line}{postmortem_link}\n\n"
                 f"Review **[MR !{mr_iid}]({mr_link})** and merge when ready. ⚽")}
+            return
+
+        # --- Match Day Simulator: traffic surge detection & auto-scale ------
+        if re.search(r"surge|traffic|crowd|spike|kickoff|attendance|fans arriv|capacity", msg):
+            stadium_match = re.search(
+                r"(metlife stadium|metlife|sofi stadium|estadio azteca|mercedes-?benz stadium|"
+                r"lumen field|at&t stadium|gillette stadium|hard rock stadium|bc place|bmo field|"
+                r"estadio bbva|estadio akron|lincoln financial field|levi'?s stadium|arrowhead stadium)",
+                message, re.I)
+            stadium = stadium_match.group(0) if stadium_match else "MetLife Stadium"
+
+            yield {"type": "status", "text": f"📈 Pulling live fan traffic metrics for {stadium}…", "timestamp": _now()}
+            ev, traffic_res = await act("get_stadium_traffic", {"stadium": stadium})
+            yield ev
+
+            if not traffic_res.get("surge"):
+                yield {"type": "reply", "timestamp": _now(), "reply": (
+                    f"📈 **Traffic check — {stadium}**\n\n"
+                    f"Request rate is **{traffic_res.get('requests_per_sec')} req/s**, right around "
+                    f"baseline ({traffic_res.get('baseline_rps')} req/s). No surge detected — all "
+                    f"fan-facing services have plenty of headroom. ⚽")}
+                return
+
+            project = traffic_res.get("affected_service", "worldcup-ticketing-api")
+            ev, status_res = await act("get_platform_status", {})
+            yield ev
+            svc = next((p for p in status_res.get("projects", [])
+                        if p["project"].split("/")[-1] == project), None)
+            health_line = (f"`{project}` pipeline is **{svc['status'].upper()}**"
+                            if svc else f"`{project}` health unknown")
+
+            new_replicas = 6
+            scale_res = {}
+            async for kind, payload in self._gated_execute(
+                    "scale_service", {"project": project, "replicas": new_replicas}, session_id):
+                if kind == "event":
+                    yield payload
+                else:
+                    scale_res = payload
+
+            if scale_res.get("approval") == "rejected":
+                yield {"type": "reply", "timestamp": _now(), "reply": (
+                    f"⚠️ **Match Day Simulator — surge detected, scaling held.**\n\n"
+                    f"Kickoff at **{stadium}** is driving fan traffic to "
+                    f"**{traffic_res.get('requests_per_sec')} req/s** "
+                    f"({traffic_res.get('surge_factor')}× baseline) — {health_line}.\n\n"
+                    f"I proposed scaling `{project}` to **{new_replicas} replicas** to absorb the "
+                    f"load, but the operator **rejected** the change. Flagging this as an "
+                    f"**at-risk service** for kickoff — capacity will not auto-scale.")}
+                return
+
+            yield {"type": "reply", "timestamp": _now(), "reply": (
+                f"🏟️ **Match Day Simulator — surge detected & handled.**\n\n"
+                f"Fans are arriving at **{stadium}** — request rate has spiked to "
+                f"**{traffic_res.get('requests_per_sec')} req/s**, "
+                f"**{traffic_res.get('surge_factor')}× baseline**. {health_line}.\n\n"
+                f"**Action taken:**\n"
+                f"- Scaled `{project}` from {scale_res.get('previous_replicas')} → "
+                f"**{scale_res.get('replicas')} replicas** (operator-approved)\n\n"
+                f"Capacity now matches kickoff demand — fans should breeze through the gates. ⚽")}
             return
 
         # --- Deploy / Match Day orchestration -------------------------------

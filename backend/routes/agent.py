@@ -122,6 +122,20 @@ async def chat_stream(request: ChatRequest):
     )
 
 
+class ApprovalRequest(BaseModel):
+    approved: bool
+
+
+@router.post("/approvals/{approval_id}")
+async def resolve_approval(approval_id: str, request: ApprovalRequest):
+    """Approve or reject a pending risky tool call (create_merge_request,
+    run_pipeline). Unblocks the matching agent loop awaiting this decision."""
+    ok = agent_svc.resolve_approval(approval_id, request.approved)
+    if not ok:
+        raise HTTPException(status_code=404, detail="No pending approval with that id")
+    return {"approval_id": approval_id, "approved": request.approved}
+
+
 @router.get("/mode")
 async def agent_mode():
     """Expose which backend + GitLab mode is active (shown as a badge in the UI)."""

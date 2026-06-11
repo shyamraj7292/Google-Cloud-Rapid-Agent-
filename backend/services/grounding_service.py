@@ -123,6 +123,53 @@ class GroundingService:
         } for _, s in scored[:top_k]]
         return {"ok": True, "mode": "local", "citations": citations}
 
+    # -- self-improving runbooks ---------------------------------------------
+    def write_entry(self, source: str, title: str, content: str) -> dict:
+        """Append a new ## section to agent/datastores/<source>.md, re-index it
+        in-memory immediately (so the same session can cite it), and best-effort
+        sync the .txt copy for Vertex AI Search re-import."""
+        base = os.path.join(os.path.dirname(__file__), "..", "..", "agent", "datastores")
+        source = re.sub(r"[^a-zA-Z0-9_-]", "_", source) or "pipeline_playbooks"
+        md_path = os.path.join(base, f"{source}.md")
+        entry = f"\n\n## {title}\n\n{content.strip()}\n"
+        try:
+            os.makedirs(base, exist_ok=True)
+            with open(md_path, "a", encoding="utf-8") as f:
+                f.write(entry)
+        except OSError as e:
+            return {"ok": False, "error": f"Could not write runbook entry: {e}"}
+
+        section = {
+            "source": source,
+            "section": title,
+            "snippet": content.strip()[:500],
+            "_tokens": _tokenize(title + " " + content),
+        }
+        self._sections.append(section)
+
+        txt_path = os.path.join(base, f"{source}.txt")
+        try:
+            with open(txt_path, "a", encoding="utf-8") as f:
+                f.write(f"\n\n## {title}\n\n{content.strip()}\n")
+        except OSError:
+            pass
+
+        gcs_synced = False
+        bucket_name = os.getenv("RUNBOOKS_GCS_BUCKET", "")
+        if bucket_name:
+            try:
+                from google.cloud import storage
+                client = storage.Client()
+                bucket = client.bucket(bucket_name)
+                with open(md_path, "rb") as f:
+                    bucket.blob(f"{source}.md").upload_from_file(f, content_type="text/markdown")
+                gcs_synced = True
+            except Exception as e:
+                logger.warning(f"GCS runbook sync failed: {e}")
+
+        logger.info(f"Runbook self-improvement: wrote new section '{title}' to {source}.md")
+        return {"ok": True, "source": source, "section": title, "gcs_synced": gcs_synced}
+
     def _search_vertex(self, query: str, top_k: int) -> dict:
         serving_config = (
             f"projects/{self.project_id}/locations/{self.search_location}"

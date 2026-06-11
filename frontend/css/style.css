@@ -471,6 +471,46 @@ code, pre { font-family: var(--font-mono); }
   font-weight: 600;
 }
 
+.af-approval {
+  flex-wrap: wrap;
+  background: rgba(255, 193, 7, 0.08);
+  border: 1px solid rgba(255, 193, 7, 0.35);
+  border-radius: 6px;
+  padding: var(--space-sm);
+  margin: 4px 0;
+}
+
+.af-approval-buttons {
+  display: flex;
+  gap: var(--space-sm);
+  width: 100%;
+  margin-top: 4px;
+}
+
+.btn-approve, .btn-reject {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.btn-approve {
+  background: var(--accent-green);
+  color: #0b1d12;
+}
+
+.btn-reject {
+  background: rgba(255, 80, 80, 0.85);
+  color: #2a0808;
+}
+
+.af-decision {
+  font-weight: 600;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

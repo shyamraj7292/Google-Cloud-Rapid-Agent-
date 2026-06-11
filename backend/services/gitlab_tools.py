@@ -454,6 +454,27 @@ class GitLabToolExecutor:
         proj["issues"].append(issue)
         return self._ok(project=path, issue_iid=iid, title=title, web_url=issue["web_url"])
 
+    async def create_wiki_page(self, project: str, title: str, content: str) -> dict:
+        """Publish a wiki page (used for incident postmortems). No MCP wiki
+        support exists yet, so this goes straight to python-gitlab / simulation."""
+        path = self._resolve_project_path(project)
+        slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", title.strip().lower()).strip("-") or "postmortem"
+        if self.mode in ("live", "mcp+live") and self.gl:
+            try:
+                proj = self.gl.projects.get(path)
+                page = proj.wikis.create({"title": title, "content": content, "format": "markdown"})
+                web_url = f"{self.api_url.replace('/api/v4', '')}/{path}/-/wikis/{getattr(page, 'slug', slug)}"
+                return self._ok(project=path, title=title, slug=getattr(page, "slug", slug), web_url=web_url)
+            except Exception as e:
+                return self._err(f"create_wiki_page failed: {e}")
+        proj = self._sim["projects"].get(path)
+        if not proj:
+            return self._err(f"Unknown project '{path}'")
+        page = {"title": title, "slug": slug, "content": content, "format": "markdown",
+                "created_at": _now(), "web_url": f"https://gitlab.com/{path}/-/wikis/{slug}"}
+        proj.setdefault("wikis", []).append(page)
+        return self._ok(project=path, title=title, slug=slug, web_url=page["web_url"])
+
     def run_pipeline(self, project: str, ref: str = "main") -> dict:
         """Trigger a pipeline. In simulation, a branch that carries the fix goes
         green; anything else reproduces the original failure — so the agent can
@@ -477,6 +498,34 @@ class GitLabToolExecutor:
                                      "sha": "newsha1", "created_at": _now()})
         return self._ok(project=path, pipeline_id=new_id, status=status, ref=ref,
                         web_url=f"https://gitlab.com/{path}/-/pipelines/{new_id}")
+
+    def get_stadium_traffic(self, stadium: str = "MetLife Stadium") -> dict:
+        """Match Day Simulator: simulated real-time fan traffic / request-rate
+        metrics for a stadium's fan-facing services. There is no real traffic
+        API — this is a themed demo overlay so judges can watch the agent
+        detect a kickoff surge and react. Always simulated, in any mode."""
+        import random
+        baseline = 1200
+        surge = bool(re.search(r"metlife|kickoff|match\s*day|final", stadium, re.I))
+        rps = int(baseline * (6 if surge else 1) + random.randint(-50, 50))
+        return self._ok(
+            stadium=stadium,
+            requests_per_sec=rps,
+            baseline_rps=baseline,
+            surge=surge,
+            surge_factor=round(rps / baseline, 1),
+            affected_service="worldcup-ticketing-api" if surge else None,
+        )
+
+    def scale_service(self, project: str, replicas: int) -> dict:
+        """Match Day Simulator: scale a service's replica count to absorb a
+        traffic surge. Simulated — updates an in-memory replica count for the
+        demo (no real infrastructure is touched), independent of GitLab mode."""
+        name = project.split("/")[-1]
+        replica_state = self._sim.setdefault("replicas", {})
+        previous = replica_state.get(name, 2)
+        replica_state[name] = replicas
+        return self._ok(project=name, previous_replicas=previous, replicas=replicas)
 
     def get_platform_status(self) -> dict:
         """Aggregate latest pipeline status across all World Cup repos."""
