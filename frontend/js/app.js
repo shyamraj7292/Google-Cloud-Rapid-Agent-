@@ -21,42 +21,25 @@ const state = {
   liveProjects: [],       // filled from /api/dashboard/projects
 };
 
-// ── Static fallback project data ────────────────────────────
-const FALLBACK_PROJECTS = [
-  { id: 1, name: 'worldcup-fan-app',          description: 'React PWA — schedules, scores, venue maps',
-    web_url: 'https://gitlab.com/shyamraj10335/worldcup-fan-app',
-    latest_pipeline: { id: 78, status: 'success', ref: 'main', web_url: '#' },
-    pipeline_history: ['success','success','success','failed','success'],
-    open_mrs: 2, open_issues: 5 },
-  { id: 2, name: 'worldcup-ticketing-api',    description: 'Python FastAPI ticketing microservice',
-    web_url: 'https://gitlab.com/shyamraj10335/worldcup-ticketing-api',
-    latest_pipeline: { id: 43, status: 'failed', ref: 'main', web_url: '#' },
-    pipeline_history: ['failed','success','success','running','success'],
-    open_mrs: 1, open_issues: 3 },
-  { id: 3, name: 'worldcup-stadium-dashboard',description: 'Real-time stadium operations dashboard',
-    web_url: 'https://gitlab.com/shyamraj10335/worldcup-stadium-dashboard',
-    latest_pipeline: { id: 31, status: 'running', ref: 'main', web_url: '#' },
-    pipeline_history: ['running','success','success','success','success'],
-    open_mrs: 0, open_issues: 2 },
-];
-
+// ── World Cup 2026 venues (names/cities are real; deployment status is
+// derived live from real pipeline health, not hardcoded) ─────
 const VENUES = [
-  { name:'MetLife Stadium',         city:'East Rutherford, NJ', flag:'🇺🇸', status:'deployed' },
-  { name:'AT&T Stadium',            city:'Arlington, TX',       flag:'🇺🇸', status:'deployed' },
-  { name:'SoFi Stadium',            city:'Inglewood, CA',       flag:'🇺🇸', status:'deployed' },
-  { name:'Hard Rock Stadium',       city:'Miami Gardens, FL',   flag:'🇺🇸', status:'deployed' },
-  { name:'Lumen Field',             city:'Seattle, WA',         flag:'🇺🇸', status:'deployed' },
-  { name:'Gillette Stadium',        city:'Foxborough, MA',      flag:'🇺🇸', status:'deployed' },
-  { name:'Lincoln Financial Field', city:'Philadelphia, PA',    flag:'🇺🇸', status:'deployed' },
-  { name:'Mercedes-Benz Stadium',   city:'Atlanta, GA',         flag:'🇺🇸', status:'deployed' },
-  { name:'NRG Stadium',             city:'Houston, TX',         flag:'🇺🇸', status:'pending' },
-  { name:'Arrowhead Stadium',       city:'Kansas City, MO',     flag:'🇺🇸', status:'deployed' },
-  { name:"Levi's Stadium",          city:'Santa Clara, CA',     flag:'🇺🇸', status:'deployed' },
-  { name:'BMO Field',               city:'Toronto, ON',         flag:'🇨🇦', status:'staging' },
-  { name:'BC Place',                city:'Vancouver, BC',       flag:'🇨🇦', status:'deployed' },
-  { name:'Estadio Azteca',          city:'Mexico City',         flag:'🇲🇽', status:'deployed' },
-  { name:'Estadio BBVA',            city:'Monterrey',           flag:'🇲🇽', status:'staging' },
-  { name:'Estadio Akron',           city:'Guadalajara',         flag:'🇲🇽', status:'deployed' },
+  { name:'MetLife Stadium',         city:'East Rutherford, NJ', flag:'🇺🇸' },
+  { name:'AT&T Stadium',            city:'Arlington, TX',       flag:'🇺🇸' },
+  { name:'SoFi Stadium',            city:'Inglewood, CA',       flag:'🇺🇸' },
+  { name:'Hard Rock Stadium',       city:'Miami Gardens, FL',   flag:'🇺🇸' },
+  { name:'Lumen Field',             city:'Seattle, WA',         flag:'🇺🇸' },
+  { name:'Gillette Stadium',        city:'Foxborough, MA',      flag:'🇺🇸' },
+  { name:'Lincoln Financial Field', city:'Philadelphia, PA',    flag:'🇺🇸' },
+  { name:'Mercedes-Benz Stadium',   city:'Atlanta, GA',         flag:'🇺🇸' },
+  { name:'NRG Stadium',             city:'Houston, TX',         flag:'🇺🇸' },
+  { name:'Arrowhead Stadium',       city:'Kansas City, MO',     flag:'🇺🇸' },
+  { name:"Levi's Stadium",          city:'Santa Clara, CA',     flag:'🇺🇸' },
+  { name:'BMO Field',               city:'Toronto, ON',         flag:'🇨🇦' },
+  { name:'BC Place',                city:'Vancouver, BC',       flag:'🇨🇦' },
+  { name:'Estadio Azteca',          city:'Mexico City',         flag:'🇲🇽' },
+  { name:'Estadio BBVA',            city:'Monterrey',           flag:'🇲🇽' },
+  { name:'Estadio Akron',           city:'Guadalajara',         flag:'🇲🇽' },
 ];
 
 const QUICK_MSGS = {
@@ -221,10 +204,12 @@ async function loadLivePipelines() {
     const data = await res.json();
     state.liveProjects = data.projects || [];
     if (state.liveProjects.length === 0) throw new Error('empty');
-  } catch {
-    state.liveProjects = FALLBACK_PROJECTS;
+    renderPipelines(state.liveProjects);
+  } catch (err) {
+    state.liveProjects = [];
+    DOM.pipelineGrid.innerHTML = `<div class="pipeline-loading"><span>⚠️ Couldn't load live GitLab data (${err.message}). Retrying…</span></div>`;
   }
-  renderPipelines(state.liveProjects);
+  renderVenues();
 }
 
 // ── Pipeline renderer ─────────────────────────────────────────
@@ -324,11 +309,20 @@ function fixPipeline(projectName) {
 }
 
 // ── Venue renderer ────────────────────────────────────────────
+// Venue deployment status is derived from real, live pipeline health
+// (state.liveProjects) — not per-venue hardcoded data.
 function renderVenues() {
   if (!DOM.venueGrid) return;
+  const projects = state.liveProjects || [];
+  let status = 'pending';
+  if (projects.length > 0) {
+    const passed = projects.filter(p => (p.latest_pipeline || {}).status === 'success').length;
+    const pct = passed / projects.length;
+    status = pct === 1 ? 'deployed' : pct > 0 ? 'staging' : 'pending';
+  }
   DOM.venueGrid.innerHTML = VENUES.map((v) => `
     <div class="venue-card">
-      <span class="venue-status-dot venue-status-dot--${v.status}"></span>
+      <span class="venue-status-dot venue-status-dot--${status}"></span>
       <div class="venue-info">
         <div class="venue-name">${v.name}</div>
         <div class="venue-city">${v.city}</div>
@@ -354,15 +348,7 @@ async function handleSend() {
     await streamFromAgent(message, typingEl);
   } catch (err) {
     removeElement(typingEl);
-    addChatMessage('agent', `⚠️ Live agent error (${err.message}). Showing demo flow.`);
-    const demo = generateDemoResponse(message);
-    showActionFeed(true);
-    for (const a of demo.actions) {
-      addActionFeedItem(a);
-      addTimelineItem(a);
-      await sleep(350);
-    }
-    addChatMessage('agent', demo.reply);
+    addChatMessage('agent', `⚠️ Agent error: ${err.message}. Please try again.`);
   }
 
   state.isWaiting = false;
@@ -596,76 +582,6 @@ function renderMarkdown(md) {
   return h;
 }
 
-// ── Demo fallback ─────────────────────────────────────────────
-function generateDemoResponse(message) {
-  const msg = message.toLowerCase();
-  const ts  = new Date().toISOString();
-
-  if (/pipeline|fail|broken|triage|investigat|fix/.test(msg)) {
-    return {
-      reply: `🔍 <strong>Pipeline Triage Complete.</strong><br><br>
-Found the root cause in <code>worldcup-ticketing-api</code>:<br>
-<code>TOKEN_EXPIRY_SECONDS = 360</code> (6 min) should be <code>3600</code> (1 hour) — fans were getting locked out at venue gates.<br><br>
-<strong>Actions taken:</strong><br>
-<div class="md-li">📂 Read <code>app/main.py</code> — confirmed the typo</div>
-<div class="md-li">🌿 Created branch <code>fix/auth-token-expiry</code></div>
-<div class="md-li">✏️ Committed the fix</div>
-<div class="md-li">🔀 Opened <strong>MR !2</strong> with full root-cause writeup</div>
-<div class="md-li">🚀 Re-ran pipeline → ✅ green</div><br>
-⚽ Ready for merge. Two days until kickoff!`,
-      actions: [
-        { tool_name:'list_pipelines',       description:'Found pipeline #43 FAILED in worldcup-ticketing-api', timestamp:ts, status:'completed' },
-        { tool_name:'get_pipeline_job_log', description:'Read unit_test log — AssertionError on TOKEN_EXPIRY_SECONDS', timestamp:ts, status:'completed' },
-        { tool_name:'search_runbooks',      description:'Grounded in Pipeline Triage Playbook §1', timestamp:ts, status:'completed' },
-        { tool_name:'get_file_contents',    description:'Read app/main.py — confirmed TOKEN_EXPIRY_SECONDS = 360', timestamp:ts, status:'completed' },
-        { tool_name:'create_branch',        description:'Created fix/auth-token-expiry from main', timestamp:ts, status:'completed' },
-        { tool_name:'create_or_update_file',description:'Committed TOKEN_EXPIRY_SECONDS = 3600 fix', timestamp:ts, status:'completed' },
-        { tool_name:'create_merge_request', description:'Opened MR !2: fix(auth): restore token expiry to 3600s', timestamp:ts, status:'completed' },
-        { tool_name:'run_pipeline',         description:'Pipeline on fix branch → ✅ success', timestamp:ts, status:'completed' },
-      ],
-    };
-  }
-
-  if (/deploy|match\s*day|stadium|metlife/.test(msg)) {
-    return {
-      reply: `🏟️ <strong>Match Day Protocol — All Clear.</strong><br><br>
-<table>
-<tr><th>Service</th><th>Pipeline</th><th>Status</th></tr>
-<tr><td><code>worldcup-fan-app</code></td><td>#78</td><td>✅ Green</td></tr>
-<tr><td><code>worldcup-ticketing-api</code></td><td>#43</td><td>✅ Green</td></tr>
-<tr><td><code>worldcup-stadium-dashboard</code></td><td>#31</td><td>✅ Green</td></tr>
-</table><br>
-🚀 All 3 services green. Deployment freeze is now active. MetLife Stadium is go for match night. ⚽`,
-      actions: [
-        { tool_name:'get_platform_status', description:'All 3 repos green — match day deploy approved', timestamp:ts, status:'completed' },
-      ],
-    };
-  }
-
-  if (/status|health|overview|sprint/.test(msg)) {
-    return {
-      reply: `📊 <strong>World Cup Platform Health</strong><br><br>
-<table>
-<tr><th>Service</th><th>Pipeline</th><th>Status</th></tr>
-<tr><td><code>worldcup-fan-app</code></td><td>#78</td><td>✅ Passed</td></tr>
-<tr><td><code>worldcup-ticketing-api</code></td><td>#43</td><td>❌ Failed</td></tr>
-<tr><td><code>worldcup-stadium-dashboard</code></td><td>#31</td><td>🔄 Running</td></tr>
-</table><br>
-1 of 3 failing. Say <em>"triage the ticketing API"</em> and I'll fix it right now. ⚽`,
-      actions: [
-        { tool_name:'get_platform_status', description:'Aggregated pipeline health across all repos', timestamp:ts, status:'completed' },
-      ],
-    };
-  }
-
-  return {
-    reply: `⚽ <strong>Copa Agent</strong> — World Cup 2026 DevOps Commander.<br><br>
-The tournament kicks off in <strong>2 days</strong>. I'm watching 3 services, 16 venues, and real GitLab pipelines via MCP.<br><br>
-Pick a quick action ↗ or tell me what needs fixing.`,
-    actions: [],
-  };
-}
-
 // ── Utilities ─────────────────────────────────────────────────
 function escapeHtml(str) {
   const d = document.createElement('div');
@@ -673,4 +589,3 @@ function escapeHtml(str) {
   return d.innerHTML;
 }
 function removeElement(el)  { if (el?.parentNode) el.parentNode.removeChild(el); }
-function sleep(ms)          { return new Promise(r => setTimeout(r, ms)); }

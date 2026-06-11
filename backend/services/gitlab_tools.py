@@ -5,29 +5,19 @@ Copa Agent — GitLab Tool Executor
 This is the layer the *agent's* tool calls actually execute against. It is the
 single source of truth for every action Copa Agent can take on GitLab.
 
-Two execution modes, chosen automatically per-process:
+Production mode only — this is a live-data system:
 
-  • LIVE         — a real GITLAB_PERSONAL_ACCESS_TOKEN is present and
-                   python-gitlab authenticates successfully. Every tool performs
-                   a real GitLab API call (real branches, real MRs, real issues).
+  • A real GITLAB_PERSONAL_ACCESS_TOKEN is required. python-gitlab
+    authenticates against the configured GitLab instance and every tool
+    performs a real GitLab API call (real pipelines, real branches, real
+    MRs, real issues, real wiki pages).
 
-  • SIMULATION   — no token / auth failed. Tools run against an in-memory model
-                   of the World Cup platform that *behaves* like GitLab: it has a
-                   seeded failing pipeline, real job logs, and the planted
-                   TOKEN_EXPIRY bug. Creating a branch/MR/issue mutates this
-                   state so the agent's multi-step workflow stays internally
-                   consistent across a whole demo — and a re-run of the fixed
-                   pipeline actually turns green.
-
-Both modes return the *same* structured dict shape, so the agent loop and the
-UI never need to care which one is active. That is what makes the demo
-bulletproof and the moment-a-token-drops-in upgrade free.
+  • If credentials are missing or auth fails, tools return a real error
+    (`{"ok": False, "error": "..."}`) — there is no fake/simulated data.
 """
 
 import os
 import re
-import copy
-import time
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -39,120 +29,11 @@ try:
     GITLAB_SDK_AVAILABLE = True
 except ImportError:
     GITLAB_SDK_AVAILABLE = False
-    logger.warning("python-gitlab not installed — GitLab tools will run in SIMULATION mode.")
+    logger.warning("python-gitlab not installed — GitLab tools will be unavailable.")
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-# ----------------------------------------------------------------------------
-#  SIMULATION WORLD
-# ----------------------------------------------------------------------------
-# A self-consistent snapshot of the World Cup platform. The planted bug lives in
-# worldcup-ticketing-api: TOKEN_EXPIRY_SECONDS = 360 (should be 3600), which
-# fails the unit test `test_token_expiry_constant`. The agent reads the real
-# job log, patches the real constant, opens an MR — and a re-run goes green.
-
-_TICKETING_FILE_PATH = "app/main.py"
-
-_TICKETING_FILE_BUGGY = '''\
-# --- Constants ---
-TOKEN_EXPIRY_SECONDS = 360  # BUG: Should be 3600 (1 hour), typo causes tokens to expire in 6 minutes
-MAX_TICKETS_PER_USER = 4
-TICKET_CATEGORIES = ["Category 1", "Category 2", "Category 3", "Category 4"]
-'''
-
-_FAILING_JOB_LOG = """\
-$ pytest tests/ -v --tb=short
-============================= test session starts ==============================
-platform linux -- Python 3.11.6, pytest-7.4.3
-collected 8 items
-
-tests/test_auth.py::test_token_expiry_constant FAILED                    [ 12%]
-tests/test_auth.py::test_max_tickets_per_user PASSED                     [ 25%]
-tests/test_auth.py::test_ticket_categories_exist PASSED                  [ 37%]
-tests/test_auth.py::test_generate_auth_token PASSED                      [ 50%]
-tests/test_auth.py::test_validate_auth_token_valid PASSED               [ 62%]
-tests/test_auth.py::test_validate_auth_token_expired PASSED             [ 75%]
-tests/test_auth.py::test_health_endpoint PASSED                          [ 87%]
-tests/test_auth.py::test_root_endpoint PASSED                            [100%]
-
-=================================== FAILURES ===================================
-_________________________ test_token_expiry_constant ___________________________
-
-    def test_token_expiry_constant():
-        from app.main import TOKEN_EXPIRY_SECONDS
->       assert TOKEN_EXPIRY_SECONDS == EXPECTED_TOKEN_EXPIRY, (
-            f"Expected token expiry {EXPECTED_TOKEN_EXPIRY}, got {TOKEN_EXPIRY_SECONDS}. "
-            f"Tokens expiring too quickly will lock fans out at venue entry gates."
-        )
-E       AssertionError: Expected token expiry 3600, got 360.
-E       Tokens expiring too quickly will lock fans out at venue entry gates.
-E       assert 360 == 3600
-
-tests/test_auth.py:19: AssertionError
-=========================== short test summary info ============================
-FAILED tests/test_auth.py::test_token_expiry_constant - AssertionError: Expec...
-ERROR: Job failed: exit code 1
-"""
-
-
-def _fresh_sim_state() -> dict:
-    return {
-        "projects": {
-            "worldcup/worldcup-fan-app": {
-                "id": 101,
-                "name": "worldcup-fan-app",
-                "default_branch": "main",
-                "branches": ["main", "develop"],
-                "pipelines": [
-                    {"id": 78, "status": "success", "ref": "main", "sha": "a1b2c3d", "created_at": _now()},
-                ],
-                "merge_requests": [],
-                "issues": [],
-                "files": {},
-                "next_mr_iid": 12,
-                "next_issue_iid": 6,
-            },
-            "worldcup/worldcup-ticketing-api": {
-                "id": 102,
-                "name": "worldcup-ticketing-api",
-                "default_branch": "main",
-                "branches": ["main"],
-                "pipelines": [
-                    {"id": 42, "status": "failed", "ref": "main", "sha": "f00dbad",
-                     "created_at": _now(),
-                     "jobs": [
-                         {"name": "build", "stage": "build", "status": "success"},
-                         {"name": "unit_test", "stage": "test", "status": "failed", "log": _FAILING_JOB_LOG},
-                     ]},
-                ],
-                "merge_requests": [],
-                "issues": [
-                    {"iid": 22, "title": "bug: Auth token expiry too short",
-                     "state": "opened", "labels": ["bug", "critical"], "created_at": _now()},
-                ],
-                "files": {_TICKETING_FILE_PATH: _TICKETING_FILE_BUGGY},
-                "next_mr_iid": 18,
-                "next_issue_iid": 23,
-            },
-            "worldcup/worldcup-stadium-dashboard": {
-                "id": 103,
-                "name": "worldcup-stadium-dashboard",
-                "default_branch": "main",
-                "branches": ["main"],
-                "pipelines": [
-                    {"id": 31, "status": "running", "ref": "main", "sha": "c0ffee1", "created_at": _now()},
-                ],
-                "merge_requests": [],
-                "issues": [],
-                "files": {},
-                "next_mr_iid": 7,
-                "next_issue_iid": 4,
-            },
-        }
-    }
 
 
 class GitLabToolExecutor:
@@ -167,7 +48,7 @@ class GitLabToolExecutor:
       • Pipeline operations (list_pipelines, list_pipeline_jobs, get_pipeline_job_log,
         run_pipeline, get_platform_status) are not covered by the official MCP server
         and continue to use python-gitlab directly.
-      • Everything falls back to the stateful SIMULATION if no token is present.
+      • If no live credentials are configured, every tool returns a real error.
     """
 
     def __init__(self):
@@ -175,11 +56,14 @@ class GitLabToolExecutor:
         self.api_url = os.getenv("GITLAB_API_URL", "https://gitlab.com/api/v4")
         self.group_path = os.getenv("GITLAB_GROUP_PATH", "worldcup")
         self.gl = None
-        self.mode = "simulation"
-        self._sim = _fresh_sim_state()
+        self.mode = "unavailable"
         self.mcp = None  # MCPGitLabClient — set via async init_mcp()
 
-        if GITLAB_SDK_AVAILABLE and self.token and not self.token.startswith("glpat-xxxx"):
+        if not GITLAB_SDK_AVAILABLE:
+            logger.error("python-gitlab not installed — GitLab tools are unavailable.")
+        elif not self.token or self.token.startswith("glpat-xxxx"):
+            logger.error("GITLAB_PERSONAL_ACCESS_TOKEN not set — GitLab tools are unavailable.")
+        else:
             try:
                 self.gl = gitlab.Gitlab(
                     self.api_url.replace("/api/v4", ""),
@@ -189,11 +73,8 @@ class GitLabToolExecutor:
                 self.mode = "live"
                 logger.info("GitLab tool executor: LIVE mode (authenticated).")
             except Exception as e:
-                logger.warning(f"GitLab auth failed ({e}); falling back to SIMULATION mode.")
+                logger.error(f"GitLab auth failed ({e}) — GitLab tools are unavailable.")
                 self.gl = None
-
-        if self.mode == "simulation":
-            logger.info("GitLab tool executor: SIMULATION mode (no live token).")
 
     async def init_mcp(self):
         """Start the MCP client (called once at app startup from lifespan)."""
@@ -226,77 +107,61 @@ class GitLabToolExecutor:
     def _err(self, message: str) -> dict:
         return {"ok": False, "error": message}
 
+    def _unavailable(self, tool: str) -> dict:
+        return self._err(
+            f"{tool} failed: GitLab is not connected (no live credentials configured)."
+        )
+
     # ========================================================================
     #  TOOL IMPLEMENTATIONS
-    #  Each returns a JSON-serializable dict. Same shape in both modes.
+    #  Each returns a JSON-serializable dict, backed by real GitLab data.
     # ========================================================================
 
     def list_pipelines(self, project: str, limit: int = 5) -> dict:
         path = self._resolve_project_path(project)
-        if self.mode in ("live", "mcp+live"):
-            try:
-                proj = self.gl.projects.get(path)
-                pls = proj.pipelines.list(per_page=limit, get_all=False)
-                return self._ok(project=path, pipelines=[
-                    {"id": p.id, "status": p.status, "ref": p.ref,
-                     "sha": getattr(p, "sha", "")[:8], "web_url": p.web_url}
-                    for p in pls
-                ])
-            except Exception as e:
-                return self._err(f"list_pipelines failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        return self._ok(project=path, pipelines=[
-            {k: v for k, v in p.items() if k != "jobs"} for p in proj["pipelines"][:limit]
-        ])
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("list_pipelines")
+        try:
+            proj = self.gl.projects.get(path)
+            pls = proj.pipelines.list(per_page=limit, get_all=False)
+            return self._ok(project=path, pipelines=[
+                {"id": p.id, "status": p.status, "ref": p.ref,
+                 "sha": getattr(p, "sha", "")[:8], "web_url": p.web_url}
+                for p in pls
+            ])
+        except Exception as e:
+            return self._err(f"list_pipelines failed: {e}")
 
     def list_pipeline_jobs(self, project: str, pipeline_id: int) -> dict:
         path = self._resolve_project_path(project)
-        if self.mode in ("live", "mcp+live"):
-            try:
-                proj = self.gl.projects.get(path)
-                pl = proj.pipelines.get(pipeline_id)
-                jobs = pl.jobs.list(get_all=True)
-                return self._ok(project=path, pipeline_id=pipeline_id, jobs=[
-                    {"id": j.id, "name": j.name, "stage": j.stage, "status": j.status}
-                    for j in jobs
-                ])
-            except Exception as e:
-                return self._err(f"list_pipeline_jobs failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        pl = next((p for p in proj["pipelines"] if p["id"] == int(pipeline_id)), None)
-        if not pl:
-            return self._err(f"Pipeline #{pipeline_id} not found in {path}")
-        return self._ok(project=path, pipeline_id=pipeline_id, jobs=[
-            {"name": j["name"], "stage": j["stage"], "status": j["status"]}
-            for j in pl.get("jobs", [])
-        ])
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("list_pipeline_jobs")
+        try:
+            proj = self.gl.projects.get(path)
+            pl = proj.pipelines.get(pipeline_id)
+            jobs = pl.jobs.list(get_all=True)
+            return self._ok(project=path, pipeline_id=pipeline_id, jobs=[
+                {"id": j.id, "name": j.name, "stage": j.stage, "status": j.status}
+                for j in jobs
+            ])
+        except Exception as e:
+            return self._err(f"list_pipeline_jobs failed: {e}")
 
     def get_pipeline_job_log(self, project: str, job_name: str, pipeline_id: Optional[int] = None) -> dict:
         path = self._resolve_project_path(project)
-        if self.mode in ("live", "mcp+live"):
-            try:
-                proj = self.gl.projects.get(path)
-                pl = proj.pipelines.get(pipeline_id) if pipeline_id else proj.pipelines.list(per_page=1)[0]
-                job = next((j for j in pl.jobs.list(get_all=True) if j.name == job_name), None)
-                if not job:
-                    return self._err(f"Job '{job_name}' not found")
-                full_job = proj.jobs.get(job.id)
-                log = full_job.trace().decode("utf-8", errors="replace")
-                return self._ok(project=path, job_name=job_name, log=log[-6000:])
-            except Exception as e:
-                return self._err(f"get_pipeline_job_log failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        for pl in proj["pipelines"]:
-            for j in pl.get("jobs", []):
-                if j["name"] == job_name and "log" in j:
-                    return self._ok(project=path, job_name=job_name, log=j["log"])
-        return self._err(f"No log available for job '{job_name}'")
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("get_pipeline_job_log")
+        try:
+            proj = self.gl.projects.get(path)
+            pl = proj.pipelines.get(pipeline_id) if pipeline_id else proj.pipelines.list(per_page=1)[0]
+            job = next((j for j in pl.jobs.list(get_all=True) if j.name == job_name), None)
+            if not job:
+                return self._err(f"Job '{job_name}' not found")
+            full_job = proj.jobs.get(job.id)
+            log = full_job.trace().decode("utf-8", errors="replace")
+            return self._ok(project=path, job_name=job_name, log=log[-6000:])
+        except Exception as e:
+            return self._err(f"get_pipeline_job_log failed: {e}")
 
     async def get_file_contents(self, project: str, file_path: str, ref: str = "main") -> dict:
         path = self._resolve_project_path(project)
@@ -308,21 +173,15 @@ class GitLabToolExecutor:
                 content = result.get("content", result.get("result", ""))
                 return self._ok(project=path, file_path=file_path, content=content, via="mcp")
         # python-gitlab fallback
-        if self.mode in ("live", "mcp+live") and self.gl:
-            try:
-                proj = self.gl.projects.get(path)
-                f = proj.files.get(file_path=file_path, ref=ref)
-                return self._ok(project=path, file_path=file_path,
-                                content=f.decode().decode("utf-8", errors="replace"))
-            except Exception as e:
-                return self._err(f"get_file_contents failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        content = proj["files"].get(file_path)
-        if content is None:
-            return self._err(f"File '{file_path}' not found in {path}")
-        return self._ok(project=path, file_path=file_path, content=content)
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("get_file_contents")
+        try:
+            proj = self.gl.projects.get(path)
+            f = proj.files.get(file_path=file_path, ref=ref)
+            return self._ok(project=path, file_path=file_path,
+                            content=f.decode().decode("utf-8", errors="replace"))
+        except Exception as e:
+            return self._err(f"get_file_contents failed: {e}")
 
     async def create_branch(self, project: str, branch: str, ref: str = "main") -> dict:
         path = self._resolve_project_path(project)
@@ -333,20 +192,14 @@ class GitLabToolExecutor:
                 return self._ok(project=path, branch=branch, via="mcp",
                                 web_url=f"https://gitlab.com/{path}/-/tree/{branch}")
         # python-gitlab fallback
-        if self.mode in ("live", "mcp+live") and self.gl:
-            try:
-                proj = self.gl.projects.get(path)
-                b = proj.branches.create({"branch": branch, "ref": ref})
-                return self._ok(project=path, branch=b.name, web_url=getattr(b, "web_url", ""))
-            except Exception as e:
-                return self._err(f"create_branch failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        if branch not in proj["branches"]:
-            proj["branches"].append(branch)
-        return self._ok(project=path, branch=branch, created_from=ref,
-                        web_url=f"https://gitlab.com/{path}/-/tree/{branch}")
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("create_branch")
+        try:
+            proj = self.gl.projects.get(path)
+            b = proj.branches.create({"branch": branch, "ref": ref})
+            return self._ok(project=path, branch=b.name, web_url=getattr(b, "web_url", ""))
+        except Exception as e:
+            return self._err(f"create_branch failed: {e}")
 
     async def create_or_update_file(self, project: str, file_path: str, content: str,
                                      branch: str, commit_message: str) -> dict:
@@ -359,31 +212,23 @@ class GitLabToolExecutor:
                 return self._ok(project=path, file_path=file_path,
                                 branch=branch, commit_message=commit_message, via="mcp")
         # python-gitlab fallback
-        if self.mode in ("live", "mcp+live") and self.gl:
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("create_or_update_file")
+        try:
+            proj = self.gl.projects.get(path)
             try:
-                proj = self.gl.projects.get(path)
-                try:
-                    f = proj.files.get(file_path=file_path, ref=branch)
-                    f.content = content
-                    f.save(branch=branch, commit_message=commit_message)
-                except gitlab.exceptions.GitlabGetError:
-                    proj.files.create({
-                        "file_path": file_path, "branch": branch,
-                        "content": content, "commit_message": commit_message,
-                    })
-                return self._ok(project=path, file_path=file_path, branch=branch,
-                                commit_message=commit_message)
-            except Exception as e:
-                return self._err(f"create_or_update_file failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        proj.setdefault("branch_files", {}).setdefault(branch, {})[file_path] = content
-        proj.setdefault("fixed_branches", set())
-        if "TOKEN_EXPIRY_SECONDS = 3600" in content:
-            proj["fixed_branches"].add(branch)
-        return self._ok(project=path, file_path=file_path, branch=branch,
-                        commit_message=commit_message)
+                f = proj.files.get(file_path=file_path, ref=branch)
+                f.content = content
+                f.save(branch=branch, commit_message=commit_message)
+            except gitlab.exceptions.GitlabGetError:
+                proj.files.create({
+                    "file_path": file_path, "branch": branch,
+                    "content": content, "commit_message": commit_message,
+                })
+            return self._ok(project=path, file_path=file_path, branch=branch,
+                            commit_message=commit_message)
+        except Exception as e:
+            return self._err(f"create_or_update_file failed: {e}")
 
     async def create_merge_request(self, project: str, source_branch: str, title: str,
                                     description: str = "", target_branch: str = "main") -> dict:
@@ -398,27 +243,17 @@ class GitLabToolExecutor:
                 return self._ok(project=path, mr_iid=iid, title=title,
                                 web_url=web_url, via="mcp")
         # python-gitlab fallback
-        if self.mode in ("live", "mcp+live") and self.gl:
-            try:
-                proj = self.gl.projects.get(path)
-                mr = proj.mergerequests.create({
-                    "source_branch": source_branch, "target_branch": target_branch,
-                    "title": title, "description": description,
-                })
-                return self._ok(project=path, mr_iid=mr.iid, title=mr.title, web_url=mr.web_url)
-            except Exception as e:
-                return self._err(f"create_merge_request failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        iid = proj["next_mr_iid"]
-        proj["next_mr_iid"] += 1
-        mr = {"iid": iid, "title": title, "description": description, "state": "opened",
-              "source_branch": source_branch, "target_branch": target_branch,
-              "author": "Copa Agent", "created_at": _now(),
-              "web_url": f"https://gitlab.com/{path}/-/merge_requests/{iid}"}
-        proj["merge_requests"].append(mr)
-        return self._ok(project=path, mr_iid=iid, title=title, web_url=mr["web_url"])
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("create_merge_request")
+        try:
+            proj = self.gl.projects.get(path)
+            mr = proj.mergerequests.create({
+                "source_branch": source_branch, "target_branch": target_branch,
+                "title": title, "description": description,
+            })
+            return self._ok(project=path, mr_iid=mr.iid, title=mr.title, web_url=mr.web_url)
+        except Exception as e:
+            return self._err(f"create_merge_request failed: {e}")
 
     async def create_issue(self, project: str, title: str, description: str = "",
                             labels: Optional[list] = None) -> dict:
@@ -432,127 +267,135 @@ class GitLabToolExecutor:
                 return self._ok(project=path, issue_iid=iid, title=title,
                                 web_url=web_url, via="mcp")
         # python-gitlab fallback
-        if self.mode in ("live", "mcp+live") and self.gl:
-            try:
-                proj = self.gl.projects.get(path)
-                issue = proj.issues.create({
-                    "title": title, "description": description,
-                    "labels": ",".join(labels or []),
-                })
-                return self._ok(project=path, issue_iid=issue.iid, title=issue.title,
-                                web_url=issue.web_url)
-            except Exception as e:
-                return self._err(f"create_issue failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        iid = proj["next_issue_iid"]
-        proj["next_issue_iid"] += 1
-        issue = {"iid": iid, "title": title, "description": description,
-                 "state": "opened", "labels": labels or [], "created_at": _now(),
-                 "web_url": f"https://gitlab.com/{path}/-/issues/{iid}"}
-        proj["issues"].append(issue)
-        return self._ok(project=path, issue_iid=iid, title=title, web_url=issue["web_url"])
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("create_issue")
+        try:
+            proj = self.gl.projects.get(path)
+            issue = proj.issues.create({
+                "title": title, "description": description,
+                "labels": ",".join(labels or []),
+            })
+            return self._ok(project=path, issue_iid=issue.iid, title=issue.title,
+                            web_url=issue.web_url)
+        except Exception as e:
+            return self._err(f"create_issue failed: {e}")
 
     async def create_wiki_page(self, project: str, title: str, content: str) -> dict:
         """Publish a wiki page (used for incident postmortems). No MCP wiki
-        support exists yet, so this goes straight to python-gitlab / simulation."""
+        support exists yet, so this goes straight to python-gitlab."""
         path = self._resolve_project_path(project)
         slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", title.strip().lower()).strip("-") or "postmortem"
-        if self.mode in ("live", "mcp+live") and self.gl:
-            try:
-                proj = self.gl.projects.get(path)
-                page = proj.wikis.create({"title": title, "content": content, "format": "markdown"})
-                web_url = f"{self.api_url.replace('/api/v4', '')}/{path}/-/wikis/{getattr(page, 'slug', slug)}"
-                return self._ok(project=path, title=title, slug=getattr(page, "slug", slug), web_url=web_url)
-            except Exception as e:
-                return self._err(f"create_wiki_page failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        page = {"title": title, "slug": slug, "content": content, "format": "markdown",
-                "created_at": _now(), "web_url": f"https://gitlab.com/{path}/-/wikis/{slug}"}
-        proj.setdefault("wikis", []).append(page)
-        return self._ok(project=path, title=title, slug=slug, web_url=page["web_url"])
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("create_wiki_page")
+        try:
+            proj = self.gl.projects.get(path)
+            page = proj.wikis.create({"title": title, "content": content, "format": "markdown"})
+            web_url = f"{self.api_url.replace('/api/v4', '')}/{path}/-/wikis/{getattr(page, 'slug', slug)}"
+            return self._ok(project=path, title=title, slug=getattr(page, "slug", slug), web_url=web_url)
+        except Exception as e:
+            return self._err(f"create_wiki_page failed: {e}")
 
     def run_pipeline(self, project: str, ref: str = "main") -> dict:
-        """Trigger a pipeline. In simulation, a branch that carries the fix goes
-        green; anything else reproduces the original failure — so the agent can
-        *prove* its fix worked."""
+        """Trigger a real pipeline run via the GitLab API."""
         path = self._resolve_project_path(project)
-        if self.mode in ("live", "mcp+live"):
-            try:
-                proj = self.gl.projects.get(path)
-                pl = proj.pipelines.create({"ref": ref})
-                return self._ok(project=path, pipeline_id=pl.id, status=pl.status,
-                                ref=ref, web_url=pl.web_url)
-            except Exception as e:
-                return self._err(f"run_pipeline failed: {e}")
-        proj = self._sim["projects"].get(path)
-        if not proj:
-            return self._err(f"Unknown project '{path}'")
-        fixed = ref in proj.get("fixed_branches", set())
-        new_id = max((p["id"] for p in proj["pipelines"]), default=40) + 1
-        status = "success" if fixed else ("running" if proj["name"].endswith("dashboard") else "failed")
-        proj["pipelines"].insert(0, {"id": new_id, "status": status, "ref": ref,
-                                     "sha": "newsha1", "created_at": _now()})
-        return self._ok(project=path, pipeline_id=new_id, status=status, ref=ref,
-                        web_url=f"https://gitlab.com/{path}/-/pipelines/{new_id}")
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("run_pipeline")
+        try:
+            proj = self.gl.projects.get(path)
+            pl = proj.pipelines.create({"ref": ref})
+            return self._ok(project=path, pipeline_id=pl.id, status=pl.status,
+                            ref=ref, web_url=pl.web_url)
+        except Exception as e:
+            return self._err(f"run_pipeline failed: {e}")
+
+    def _list_world_cup_projects(self) -> list:
+        """Return path_with_namespace for every project in the configured group
+        (or owned-project namespace fallback for personal accounts)."""
+        try:
+            group = self.gl.groups.get(self.group_path)
+            return [p.path_with_namespace for p in group.projects.list(get_all=True)]
+        except Exception:
+            all_projects = self.gl.projects.list(owned=True, get_all=True)
+            return [p.path_with_namespace for p in all_projects
+                    if p.namespace.get("path", "") == self.group_path]
 
     def get_stadium_traffic(self, stadium: str = "MetLife Stadium") -> dict:
-        """Match Day Simulator: simulated real-time fan traffic / request-rate
-        metrics for a stadium's fan-facing services. There is no real traffic
-        API — this is a themed demo overlay so judges can watch the agent
-        detect a kickoff surge and react. Always simulated, in any mode."""
-        import random
-        baseline = 1200
-        surge = bool(re.search(r"metlife|kickoff|match\s*day|final", stadium, re.I))
-        rps = int(baseline * (6 if surge else 1) + random.randint(-50, 50))
-        return self._ok(
-            stadium=stadium,
-            requests_per_sec=rps,
-            baseline_rps=baseline,
-            surge=surge,
-            surge_factor=round(rps / baseline, 1),
-            affected_service="worldcup-ticketing-api" if surge else None,
-        )
+        """Match Day Simulator: real-time platform load signal derived from live
+        GitLab CI/CD activity. Counts pipelines created in the last 15 minutes
+        across every World Cup project — a burst of pipeline/deploy activity is
+        treated as a load surge the agent should react to. No synthetic numbers."""
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("get_stadium_traffic")
+        try:
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+            recent = []
+            for path in self._list_world_cup_projects():
+                proj = self.gl.projects.get(path)
+                for pl in proj.pipelines.list(per_page=10, get_all=False):
+                    created = datetime.fromisoformat(pl.created_at.replace("Z", "+00:00"))
+                    if created >= cutoff:
+                        recent.append({"project": path, "status": pl.status, "created_at": pl.created_at})
+            active = len(recent)
+            surge = active >= 2
+            affected = recent[0]["project"].split("/")[-1] if recent else None
+            return self._ok(
+                stadium=stadium,
+                recent_pipeline_runs=active,
+                window_minutes=15,
+                surge=surge,
+                affected_service=affected if surge else None,
+            )
+        except Exception as e:
+            return self._err(f"get_stadium_traffic failed: {e}")
 
-    def scale_service(self, project: str, replicas: int) -> dict:
-        """Match Day Simulator: scale a service's replica count to absorb a
-        traffic surge. Simulated — updates an in-memory replica count for the
-        demo (no real infrastructure is touched), independent of GitLab mode."""
-        name = project.split("/")[-1]
-        replica_state = self._sim.setdefault("replicas", {})
-        previous = replica_state.get(name, 2)
-        replica_state[name] = replicas
-        return self._ok(project=name, previous_replicas=previous, replicas=replicas)
+    async def scale_service(self, project: str, replicas: int) -> dict:
+        """Scale a service by committing an updated replica count to its
+        deployment config (k8s/deployment.yaml) on the project's default
+        branch — a real, auditable GitLab commit. No in-memory fake state."""
+        path = self._resolve_project_path(project)
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("scale_service")
+        try:
+            proj = self.gl.projects.get(path)
+            file_path = "k8s/deployment.yaml"
+            branch = proj.default_branch
+            previous = None
+            try:
+                f = proj.files.get(file_path=file_path, ref=branch)
+                content = f.decode().decode("utf-8", errors="replace")
+                m = re.search(r"replicas:\s*(\d+)", content)
+                if m:
+                    previous = int(m.group(1))
+                    new_content = re.sub(r"replicas:\s*\d+", f"replicas: {replicas}", content, count=1)
+                else:
+                    new_content = content.rstrip("\n") + f"\nreplicas: {replicas}\n"
+                f.content = new_content
+                f.save(branch=branch,
+                       commit_message=f"chore: scale {path} to {replicas} replicas (Match Day Simulator)")
+            except gitlab.exceptions.GitlabGetError:
+                new_content = f"# Match Day Simulator scaling config\nreplicas: {replicas}\n"
+                proj.files.create({
+                    "file_path": file_path, "branch": branch,
+                    "content": new_content,
+                    "commit_message": f"chore: scale {path} to {replicas} replicas (Match Day Simulator)",
+                })
+            return self._ok(project=path, previous_replicas=previous, replicas=replicas,
+                            file_path=file_path, branch=branch)
+        except Exception as e:
+            return self._err(f"scale_service failed: {e}")
 
     def get_platform_status(self) -> dict:
         """Aggregate latest pipeline status across all World Cup repos."""
-        if self.mode in ("live", "mcp+live"):
-            try:
-                rows = []
-                # Support both group namespaces and personal user namespaces.
-                # Try group first; fall back to listing owned projects filtered by namespace.
-                try:
-                    group = self.gl.groups.get(self.group_path)
-                    project_ids = [p.id for p in group.projects.list(get_all=True)]
-                except Exception:
-                    # User namespace — list owned projects and filter by namespace path
-                    all_projects = self.gl.projects.list(owned=True, get_all=True)
-                    project_ids = [
-                        p.id for p in all_projects
-                        if p.namespace.get("path", "") == self.group_path
-                    ]
-                for pid in project_ids:
-                    full = self.gl.projects.get(pid)
-                    pls = full.pipelines.list(per_page=1, get_all=False)
-                    latest = pls[0].status if pls else "unknown"
-                    rows.append({"project": full.path_with_namespace, "status": latest,
-                                 "web_url": full.web_url})
-                return self._ok(projects=rows)
-            except Exception as e:
-                return self._err(f"get_platform_status failed: {e}")
-        rows = [{"project": path, "status": proj["pipelines"][0]["status"]}
-                for path, proj in self._sim["projects"].items()]
-        return self._ok(projects=rows)
+        if self.mode not in ("live", "mcp+live") or not self.gl:
+            return self._unavailable("get_platform_status")
+        try:
+            rows = []
+            for path in self._list_world_cup_projects():
+                full = self.gl.projects.get(path)
+                pls = full.pipelines.list(per_page=1, get_all=False)
+                latest = pls[0].status if pls else "unknown"
+                rows.append({"project": full.path_with_namespace, "status": latest,
+                             "web_url": full.web_url})
+            return self._ok(projects=rows)
+        except Exception as e:
+            return self._err(f"get_platform_status failed: {e}")

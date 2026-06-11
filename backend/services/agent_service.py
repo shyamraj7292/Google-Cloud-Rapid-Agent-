@@ -25,7 +25,6 @@ All three yield the identical event stream, so routes/UI are backend-agnostic.
 """
 
 import os
-import re
 import json
 import uuid
 import logging
@@ -174,9 +173,10 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "get_stadium_traffic",
-        "description": ("Match Day Simulator: check real-time fan traffic / request-rate metrics "
-                        "for a stadium's services (ticketing, dashboard, fan app). Use this to "
-                        "detect demand surges around kickoff."),
+        "description": ("Match Day Simulator: check real, live CI/CD pipeline activity across all "
+                        "World Cup repos in the last 15 minutes as a load proxy for a stadium's "
+                        "services. A burst of recent pipeline runs is treated as a surge. Use this "
+                        "to detect demand spikes around kickoff."),
         "parameters": {"type": "object", "properties": {
             "stadium": {"type": "string", "description": "Stadium name, e.g. 'MetLife Stadium'."},
         }, "required": ["stadium"]},
@@ -296,9 +296,11 @@ class AgentService:
             "dashboard. If rejected, acknowledge it and stop rather than retrying the same action.\n\n"
             "## Match Day Simulator\n"
             "When asked about a traffic surge, crowd, kickoff, or stadium load, call "
-            "`get_stadium_traffic` to check fan request rates. If it reports a surge, check "
-            "`get_platform_status` for the affected service's health, then propose and call "
-            "`scale_service` to add replicas. Tie your narration to the World Cup match-day stakes."
+            "`get_stadium_traffic` to check live CI/CD pipeline activity as a load proxy. If it "
+            "reports a surge, check `get_platform_status` for the affected service's health, then "
+            "propose and call `scale_service` (commits an updated replica count to the project's "
+            "k8s/deployment.yaml). Tie your narration to the World Cup match-day stakes, but report "
+            "only the real numbers returned by the tools."
         )
 
     # -- tool dispatch -------------------------------------------------------
@@ -371,10 +373,12 @@ class AgentService:
             return f"📄 Published postmortem wiki page: '{args.get('title')}'"
         if name == "get_stadium_traffic":
             if result.get("surge"):
-                return (f"⚡ Traffic surge at {args.get('stadium')}: "
-                        f"{result.get('requests_per_sec')} req/s "
-                        f"({result.get('surge_factor')}x baseline)")
-            return f"Checked traffic at {args.get('stadium')} — normal levels ({result.get('requests_per_sec')} req/s)"
+                return (f"⚡ Surge signal at {args.get('stadium')}: "
+                        f"{result.get('recent_pipeline_runs')} pipeline runs in the last "
+                        f"{result.get('window_minutes')} min")
+            return (f"Checked platform load for {args.get('stadium')} — "
+                    f"{result.get('recent_pipeline_runs', 0)} pipeline runs in the last "
+                    f"{result.get('window_minutes', 15)} min, no surge")
         if name == "scale_service":
             return (f"Scaled {args.get('project')} to {result.get('replicas')} replicas "
                     f"(was {result.get('previous_replicas')})")
@@ -580,9 +584,11 @@ class AgentService:
             async for ev in self._run_scripted(message, session_id):
                 yield ev
 
-    # -- Scripted backend (deterministic, real tool calls) -------------------
+    # -- Fallback backend (no LLM available, or the LLM call failed) --------
     async def _run_scripted(self, message: str, session_id: str):
-        msg = message.lower()
+        """Used only when no AI backend is configured/available, or the gemini/
+        vertex call raised. Reports real, live platform status from GitLab —
+        never fabricates fixes, branches, MRs, or postmortems."""
 
         async def act(name, args):
             result = await self._execute_tool(name, args)
@@ -593,290 +599,24 @@ class AgentService:
                 "result": json.dumps(result)[:400], "timestamp": _now(),
             }, result
 
+        yield {"type": "status", "text": "AI model unavailable — fetching live platform status…", "timestamp": _now()}
+        ev, status_res = await act("get_platform_status", {})
+        yield ev
 
-        # --- Triage & auto-fix the failing pipeline -------------------------
-        if re.search(r"pipeline|fail|broken|triage|investigat|fix|ticket", msg):
-            project = "worldcup-ticketing-api"
-            yield {"type": "status", "text": "Scanning pipelines for failures…", "timestamp": _now()}
-            ev, res = await act("list_pipelines", {"project": project, "limit": 5})
-            yield ev
-            failed = next((p for p in res.get("pipelines", []) if p["status"] == "failed"), None)
-            pid = failed["id"] if failed else 42
-
-            ev, res = await act("list_pipeline_jobs", {"project": project, "pipeline_id": pid})
-            yield ev
-            ev, log_res = await act("get_pipeline_job_log",
-                                    {"project": project, "job_name": "unit_test", "pipeline_id": pid})
-            yield ev
-
-            # Ground the fix in a cited playbook before touching code.
-            ev, ground_res = await act("search_runbooks",
-                                       {"query": "unit test AssertionError failing pipeline fix branch merge request"})
-            yield ev
-            citations = ground_res.get("citations", [])
-            cite_line = ""
-            if citations:
-                c = citations[0]
-                cite_line = f"\n\n📖 **Playbook followed:** _{c['source']} › {c['section']}_"
-
-            ev, file_res = await act("get_file_contents",
-                                     {"project": project, "file_path": "app/main.py", "ref": "main"})
-            yield ev
-
-            branch = "fix/auth-token-expiry"
-            ev, _ = await act("create_branch", {"project": project, "branch": branch, "ref": "main"})
-            yield ev
-
-            fixed = (file_res.get("content", "")
-                     .replace("TOKEN_EXPIRY_SECONDS = 360", "TOKEN_EXPIRY_SECONDS = 3600"))
-            if "TOKEN_EXPIRY_SECONDS = 3600" not in fixed:
-                fixed = ("# --- Constants ---\nTOKEN_EXPIRY_SECONDS = 3600  "
-                         "# Fixed: 1 hour, fans get time to clear security\n"
-                         'MAX_TICKETS_PER_USER = 4\n'
-                         'TICKET_CATEGORIES = ["Category 1", "Category 2", "Category 3", "Category 4"]\n')
-            ev, _ = await act("create_or_update_file", {
-                "project": project, "file_path": "app/main.py", "content": fixed,
-                "branch": branch,
-                "commit_message": "fix(auth): restore TOKEN_EXPIRY_SECONDS to 3600 (1h)\n\n"
-                                  "A typo set token expiry to 360s (6 min), locking fans out at "
-                                  "venue gates before security clearance. Restores 1-hour validity."})
-            yield ev
-
-            mr_res = {}
-            async for kind, payload in self._gated_execute("create_merge_request", {
-                "project": project, "source_branch": branch,
-                "title": "fix(auth): restore token expiry to 3600s (1 hour)",
-                "description": ("## 🔍 Root Cause\n`TOKEN_EXPIRY_SECONDS` was `360` (6 minutes) instead "
-                                "of `3600` (1 hour) — a missing-zero typo.\n\n## 💥 Impact\nFans' auth "
-                                "tokens expired before they cleared venue security, locking them out at "
-                                "the gates on match day.\n\n## ✅ Fix\nRestored `TOKEN_EXPIRY_SECONDS = "
-                                "3600`. The failing test `test_token_expiry_constant` now passes.\n\n"
-                                "_Auto-generated by Copa Agent ⚽ following the Pipeline Triage Workflow._"),
-                "target_branch": "main"}, session_id):
-                if kind == "event":
-                    yield payload
-                else:
-                    mr_res = payload
-            if mr_res.get("approval") == "rejected":
-                yield {"type": "reply", "timestamp": _now(), "reply": (
-                    "⛔ **Triage paused.** I diagnosed the root cause (`TOKEN_EXPIRY_SECONDS` was "
-                    "`360` instead of `3600`) and prepared the fix on branch "
-                    f"`{branch}`, but the merge request was **rejected by the operator** before "
-                    "opening. No further action taken.")}
-                return
-
-            run_res = {}
-            async for kind, payload in self._gated_execute(
-                    "run_pipeline", {"project": project, "ref": branch}, session_id):
-                if kind == "event":
-                    yield payload
-                else:
-                    run_res = payload
-
-            mr_link = mr_res.get("web_url", "#")
-            mr_iid = mr_res.get("mr_iid", "?")
-            verdict = "✅ **green**" if run_res.get("status") == "success" else "🔄 running"
-
-            # --- Self-improving runbooks: document this fix pattern if it
-            # wasn't already covered by a citation. ---------------------------
-            runbook_line = ""
-            if not citations:
-                ev, _ = await act("write_runbook_entry", {
-                    "title": "Auth Token Expiry Misconfiguration (TOKEN_EXPIRY_SECONDS)",
-                    "content": (
-                        "**Symptom:** `unit_test` job fails with an assertion error on the token "
-                        "expiry constant; fans get logged out before clearing venue security.\n\n"
-                        "**Root cause:** `TOKEN_EXPIRY_SECONDS` set to `360` (6 minutes) instead of "
-                        "`3600` (1 hour) — a missing-zero typo in `app/main.py`.\n\n"
-                        "**Fix:** Restore `TOKEN_EXPIRY_SECONDS = 3600`, commit to a `fix/` branch, "
-                        "open an MR, and re-run the pipeline to confirm `test_token_expiry_constant` "
-                        "passes.\n\n"
-                        "**Prevention:** Add a CI assertion that `TOKEN_EXPIRY_SECONDS >= 3600` and "
-                        "alert if the gate-entry auth-failure rate spikes."),
-                })
-                yield ev
-                runbook_line = "\n\n🧠 **Learned:** wrote a new playbook entry so this fix pattern is grounded next time."
-
-            # --- Incident postmortem -------------------------------------------
-            postmortem_link = ""
-            ev, pm_res = await act("create_postmortem", {
-                "project": project,
-                "title": "Postmortem: Ticketing API Auth Token Expiry",
-                "content": (
-                    "## Timeline\n"
-                    f"- Pipeline #{pid} failed on the `unit_test` job\n"
-                    "- Copa Agent triaged the failure, read the job log and the offending file\n"
-                    f"- Created branch `{branch}` with the corrected constant\n"
-                    f"- Opened MR !{mr_iid} with full root-cause writeup\n"
-                    f"- Re-ran the pipeline on `{branch}` → {verdict}\n\n"
-                    "## Root Cause\n"
-                    "`TOKEN_EXPIRY_SECONDS` in `app/main.py` was `360` (6 minutes) instead of `3600` "
-                    "(1 hour) — a missing-zero typo. Fans' auth tokens expired before they cleared "
-                    "venue security, locking them out at the gates on match day.\n\n"
-                    "## Fix\n"
-                    f"Restored `TOKEN_EXPIRY_SECONDS = 3600` in `app/main.py` on branch `{branch}`, "
-                    f"opened MR !{mr_iid}, and re-ran the pipeline to confirm "
-                    "`test_token_expiry_constant` passes.\n\n"
-                    "## Prevention\n"
-                    "- Add a CI assertion enforcing `TOKEN_EXPIRY_SECONDS >= 3600`\n"
-                    "- Alert on spikes in gate-entry auth failures\n"
-                    "- New playbook entry added so future agents ground this fix in one step\n\n"
-                    "_Auto-generated by Copa Agent ⚽_"),
-            })
-            yield ev
-            if pm_res.get("ok"):
-                postmortem_link = f"\n\n📄 **Postmortem:** [{pm_res.get('title')}]({pm_res.get('web_url', '#')})"
-
+        if not status_res.get("ok"):
             yield {"type": "reply", "timestamp": _now(), "reply": (
-                f"🔍 **Pipeline triage complete — and fixed.**\n\n"
-                f"**Root cause:** `TOKEN_EXPIRY_SECONDS` in `app/main.py` was `360` (6 min) instead of "
-                f"`3600` (1 hour) — a missing-zero typo. That expired fans' tickets before they cleared "
-                f"venue security, locking them out at the gates.\n\n"
-                f"**What I did, autonomously:**\n"
-                f"1. Found failed pipeline #{pid} and the failing `unit_test` job\n"
-                f"2. Read the job log and pinpointed the assertion failure\n"
-                f"3. Created branch `{branch}` and committed the corrected constant\n"
-                f"4. Opened **[MR !{mr_iid}]({mr_link})** with full root-cause writeup (operator-approved)\n"
-                f"5. Re-ran the pipeline on the fix branch → {verdict}"
-                f"{cite_line}{runbook_line}{postmortem_link}\n\n"
-                f"Review **[MR !{mr_iid}]({mr_link})** and merge when ready. ⚽")}
+                "⚠️ I couldn't reach the AI model or GitLab right now "
+                f"({status_res.get('error', 'unknown error')}). Please try again shortly.")}
             return
 
-        # --- Match Day Simulator: traffic surge detection & auto-scale ------
-        if re.search(r"surge|traffic|crowd|spike|kickoff|attendance|fans arriv|capacity", msg):
-            stadium_match = re.search(
-                r"(metlife stadium|metlife|sofi stadium|estadio azteca|mercedes-?benz stadium|"
-                r"lumen field|at&t stadium|gillette stadium|hard rock stadium|bc place|bmo field|"
-                r"estadio bbva|estadio akron|lincoln financial field|levi'?s stadium|arrowhead stadium)",
-                message, re.I)
-            stadium = stadium_match.group(0) if stadium_match else "MetLife Stadium"
-
-            yield {"type": "status", "text": f"📈 Pulling live fan traffic metrics for {stadium}…", "timestamp": _now()}
-            ev, traffic_res = await act("get_stadium_traffic", {"stadium": stadium})
-            yield ev
-
-            if not traffic_res.get("surge"):
-                yield {"type": "reply", "timestamp": _now(), "reply": (
-                    f"📈 **Traffic check — {stadium}**\n\n"
-                    f"Request rate is **{traffic_res.get('requests_per_sec')} req/s**, right around "
-                    f"baseline ({traffic_res.get('baseline_rps')} req/s). No surge detected — all "
-                    f"fan-facing services have plenty of headroom. ⚽")}
-                return
-
-            project = traffic_res.get("affected_service", "worldcup-ticketing-api")
-            ev, status_res = await act("get_platform_status", {})
-            yield ev
-            svc = next((p for p in status_res.get("projects", [])
-                        if p["project"].split("/")[-1] == project), None)
-            health_line = (f"`{project}` pipeline is **{svc['status'].upper()}**"
-                            if svc else f"`{project}` health unknown")
-
-            new_replicas = 6
-            scale_res = {}
-            async for kind, payload in self._gated_execute(
-                    "scale_service", {"project": project, "replicas": new_replicas}, session_id):
-                if kind == "event":
-                    yield payload
-                else:
-                    scale_res = payload
-
-            if scale_res.get("approval") == "rejected":
-                yield {"type": "reply", "timestamp": _now(), "reply": (
-                    f"⚠️ **Match Day Simulator — surge detected, scaling held.**\n\n"
-                    f"Kickoff at **{stadium}** is driving fan traffic to "
-                    f"**{traffic_res.get('requests_per_sec')} req/s** "
-                    f"({traffic_res.get('surge_factor')}× baseline) — {health_line}.\n\n"
-                    f"I proposed scaling `{project}` to **{new_replicas} replicas** to absorb the "
-                    f"load, but the operator **rejected** the change. Flagging this as an "
-                    f"**at-risk service** for kickoff — capacity will not auto-scale.")}
-                return
-
-            yield {"type": "reply", "timestamp": _now(), "reply": (
-                f"🏟️ **Match Day Simulator — surge detected & handled.**\n\n"
-                f"Fans are arriving at **{stadium}** — request rate has spiked to "
-                f"**{traffic_res.get('requests_per_sec')} req/s**, "
-                f"**{traffic_res.get('surge_factor')}× baseline**. {health_line}.\n\n"
-                f"**Action taken:**\n"
-                f"- Scaled `{project}` from {scale_res.get('previous_replicas')} → "
-                f"**{scale_res.get('replicas')} replicas** (operator-approved)\n\n"
-                f"Capacity now matches kickoff demand — fans should breeze through the gates. ⚽")}
-            return
-
-        # --- Deploy / Match Day orchestration -------------------------------
-        if re.search(r"deploy|release|match\s*day|stadium|metlife|orchestrat", msg):
-            yield {"type": "status", "text": "Verifying deploy-readiness across all repos…", "timestamp": _now()}
-            ev, status_res = await act("get_platform_status", {})
-            yield ev
-            projects = status_res.get("projects", [])
-            blockers = [p for p in projects if p["status"] not in ("success",)]
-            if blockers:
-                names = ", ".join(p["project"].split("/")[-1] + f" ({p['status']})" for p in blockers)
-                yield {"type": "reply", "timestamp": _now(), "reply": (
-                    f"🛑 **Match Day Protocol — deploy HELD.**\n\n"
-                    f"I checked every World Cup repo. Not all pipelines are green, so per the Match "
-                    f"Day Protocol I will **not** deploy yet.\n\n**Blockers:** {names}\n\n"
-                    f"Say *“triage the ticketing pipeline”* and I'll fix the failure first, then we go "
-                    f"for the deploy. No half-green deploys on match day. ⚽")}
-                return
-            yield {"type": "reply", "timestamp": _now(), "reply": (
-                "🏟️ **Match Day Protocol — all clear, deploying.**\n\nEvery repo is green. Tagging "
-                "releases and triggering deploy pipelines in dependency order. Deployment freeze is "
-                "now active until T+2h. ⚽")}
-            return
-
-        # --- Status / health overview ---------------------------------------
-        if re.search(r"status|health|overview|report|sprint", msg):
-            ev, status_res = await act("get_platform_status", {})
-            yield ev
-            rows = status_res.get("projects", [])
-            icon = {"success": "✅ Passed", "failed": "❌ Failed", "running": "🔄 Running"}
-            table = "\n".join(f"| `{r['project'].split('/')[-1]}` | {icon.get(r['status'], r['status'])} |"
-                              for r in rows)
-            healthy = sum(1 for r in rows if r["status"] == "success")
-            yield {"type": "reply", "timestamp": _now(), "reply": (
-                f"📊 **World Cup Platform Health**\n\n| Service | Pipeline |\n|---|---|\n{table}\n\n"
-                f"**{healthy}/{len(rows)} green.** "
-                + ("All systems go! ⚽" if healthy == len(rows)
-                   else "Want me to triage the failing service and open a fix MR?"))}
-            return
-
-        # --- Issue → MR automation ------------------------------------------
-        if re.search(r"issue|feature|spanish|i18n|language|add ", msg):
-            project = "worldcup-fan-app"
-            ev, issue_res = await act("create_issue", {
-                "project": project, "title": "feat: Add Spanish (es) language support",
-                "description": "Add i18n scaffolding and Spanish translations for the fan app.",
-                "labels": ["enhancement", "i18n"]})
-            yield ev
-            branch = "feature/spanish-i18n"
-            ev, _ = await act("create_branch", {"project": project, "branch": branch, "ref": "main"})
-            yield ev
-            ev, _ = await act("create_or_update_file", {
-                "project": project, "file_path": "src/i18n/es.json",
-                "content": '{\n  "welcome": "¡Bienvenido a la Copa Mundial 2026!",\n'
-                           '  "tickets": "Entradas",\n  "schedule": "Calendario"\n}\n',
-                "branch": branch, "commit_message": "feat(i18n): add Spanish translations"})
-            yield ev
-            ev, mr_res = await act("create_merge_request", {
-                "project": project, "source_branch": branch,
-                "title": "feat: Add Spanish language support",
-                "description": f"Implements issue #{issue_res.get('issue_iid')}. Adds `es.json` and i18n setup.",
-                "target_branch": "main"})
-            yield ev
-            yield {"type": "reply", "timestamp": _now(), "reply": (
-                f"✅ **Issue → MR pipeline complete.**\n\n"
-                f"- 📋 Issue #{issue_res.get('issue_iid')} created\n"
-                f"- 🌿 Branch `{branch}`\n"
-                f"- 📝 **[MR !{mr_res.get('mr_iid')}]({mr_res.get('web_url', '#')})** opened with initial "
-                f"Spanish translations\n\n¡Vamos! Your team can review and extend the translations. ⚽")}
-            return
-
-        # --- Default greeting ------------------------------------------------
+        rows = status_res.get("projects", [])
+        icon = {"success": "✅ Passed", "failed": "❌ Failed", "running": "🔄 Running",
+                "pending": "⏳ Pending", "canceled": "⛔ Canceled"}
+        table = "\n".join(f"| `{r['project'].split('/')[-1]}` | {icon.get(r['status'], r['status'])} |"
+                          for r in rows)
+        healthy = sum(1 for r in rows if r["status"] == "success")
         yield {"type": "reply", "timestamp": _now(), "reply": (
-            "⚽ **Copa Agent** here — your autonomous DevOps commander for World Cup 2026.\n\n"
-            "I don't just chat, I **take action** on GitLab:\n"
-            "- 🔍 *“The ticketing API pipeline is failing”* → I triage, fix the code, and open an MR\n"
-            "- 🚀 *“Deploy for MetLife — there's a match tonight”* → I verify all repos green, then deploy\n"
-            "- 📊 *“What's our platform health?”* → live status across every repo\n"
-            "- 📝 *“Add Spanish language support”* → issue + branch + MR, end to end\n\n"
-            "What should I do?")}
+            "⚠️ **The AI reasoning model is temporarily unavailable**, so I can't plan a "
+            "multi-step fix right now — but here's the live platform status:\n\n"
+            f"| Service | Pipeline |\n|---|---|\n{table}\n\n"
+            f"**{healthy}/{len(rows)} green.** Please retry your request in a moment.")}

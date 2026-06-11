@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 # Load environment variables before importing routes — those modules construct
 # AgentService()/GitLabToolExecutor() at import time and read GITLAB_*/GOOGLE_*
 # env vars in their constructors, so .env must be loaded first or the live
-# token/model config is silently missed and everything falls back to simulation.
+# token/model config is silently missed.
 load_dotenv()
 
 from routes.agent import router as agent_router, agent_svc
@@ -39,8 +39,8 @@ async def lifespan(app: FastAPI):
     Startup: connect the GitLab MCP server (npx @modelcontextprotocol/server-gitlab)
     so that subsequent tool calls can route through the real MCP protocol.
     If the MCP server fails to start (no Node/npx, network error, bad token) the
-    agent degrades gracefully to python-gitlab for write ops and simulation for
-    everything else — it never crashes.
+    agent degrades gracefully to python-gitlab for all operations — it never
+    crashes.
 
     Shutdown: cleanly close the stdio subprocess and MCP session.
     """
